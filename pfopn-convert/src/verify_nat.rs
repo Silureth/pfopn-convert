@@ -258,7 +258,12 @@ fn split_tokens(raw: &str) -> Vec<String> {
 ///
 /// True if token is a built-in NAT interface
 fn is_builtin_nat_interface(token: &str) -> bool {
-    matches!(token, "any" | "wan" | "lan")
+    // enc0 is registered by OPNsense's IPsec plugin (ipsec.inc) and pfSense
+    // alike; openvpn/wireguard are automatic interface groups.
+    matches!(
+        token,
+        "any" | "wan" | "lan" | "enc0" | "ipsec" | "openvpn" | "wireguard"
+    )
 }
 
 #[cfg(test)]
@@ -286,6 +291,16 @@ mod tests {
         .expect("parse");
         let findings = nat_findings(&root);
         assert!(findings.iter().any(|f| f.code == "nat_missing_interface"));
+    }
+
+    #[test]
+    fn accepts_ipsec_enc0_nat_interface() {
+        let root = parse(
+            br#"<opnsense><interfaces><wan/></interfaces><nat><rule><interface>enc0</interface></rule></nat></opnsense>"#,
+        )
+        .expect("parse");
+        let findings = nat_findings(&root);
+        assert!(!findings.iter().any(|f| f.code == "nat_missing_interface"));
     }
 
     #[test]

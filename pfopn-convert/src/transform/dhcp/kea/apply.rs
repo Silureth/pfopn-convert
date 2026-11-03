@@ -71,9 +71,9 @@ pub(crate) fn apply_isc_reservations_v4(
         if !map.hostname.is_empty() {
             push_text_child(&mut res, "hostname", &map.hostname);
         }
-        if !map.cid.is_empty() {
-            push_text_child(&mut res, "client_id", &map.cid);
-        }
+        // OPNsense (26.7+) rejects reservations carrying both a MAC and a client
+        // ID. Every extracted mapping has a MAC, so the pfSense client ID (cid)
+        // is intentionally not transferred.
         if !map.descr.is_empty() {
             push_text_child(&mut res, "description", &map.descr);
         }

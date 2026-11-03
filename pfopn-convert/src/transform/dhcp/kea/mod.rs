@@ -251,7 +251,8 @@ pub fn migrate_isc_to_kea_opnsense(
                     .iter()
                     .map(|(from, to)| format!("{from}-{to}"))
                     .collect::<Vec<_>>()
-                    .join(",");
+                    // OPNsense KeaPoolsField splits pools on newlines only.
+                    .join("\n");
                 if !pools.is_empty() {
                     util::push_text_child(&mut subnet, "pools", &pools);
                 }
@@ -338,7 +339,8 @@ pub fn migrate_isc_to_kea_opnsense(
                         format!("{from_exp}-{to_exp}")
                     })
                     .collect::<Vec<_>>()
-                    .join(",");
+                    // OPNsense KeaPoolsField splits pools on newlines only.
+                    .join("\n");
                 if !pools.is_empty() {
                     util::push_text_child(&mut subnet, "pools", &pools);
                 }

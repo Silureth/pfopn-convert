@@ -14,6 +14,7 @@ pub mod openvpn;
 pub mod opnsense_assignments;
 pub mod pfblocker;
 pub mod ppps;
+pub mod rule_flags;
 pub mod section_sync;
 pub mod staticroutes;
 pub mod system_identity;

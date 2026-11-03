@@ -10,7 +10,7 @@ fn migrates_isc_v4_and_v6_into_kea() {
               <lan><ipaddr>192.168.1.1</ipaddr><subnet>24</subnet><ipaddrv6>fd00:1::1</ipaddrv6><subnetv6>64</subnetv6></lan>
             </interfaces>
             <dhcpd>
-              <lan>
+              <lan><enable></enable>
                 <range><from>192.168.1.100</from><to>192.168.1.200</to></range>
                 <range><from>192.168.1.210</from><to>192.168.1.220</to></range>
                 <gateway>192.168.1.1</gateway>
@@ -22,7 +22,7 @@ fn migrates_isc_v4_and_v6_into_kea() {
               </lan>
             </dhcpd>
             <dhcpdv6>
-              <lan>
+              <lan><enable></enable>
                 <range><from>::100</from><to>::200</to></range>
                 <domainsearchlist>v6.lab.local</domainsearchlist>
                 <dnsserver>fd00:1::1</dnsserver>
@@ -72,7 +72,8 @@ fn migrates_isc_v4_and_v6_into_kea() {
             "reservation",
             "client_id"
         ]),
-        Some("01:aa:bb")
+        None,
+        "client_id must not be written when a MAC is present"
     );
     assert_eq!(
         out.get_text(&[
@@ -87,7 +88,7 @@ fn migrates_isc_v4_and_v6_into_kea() {
     );
     assert_eq!(
         out.get_text(&["OPNsense", "Kea", "dhcp4", "subnets", "subnet4", "pools"]),
-        Some("192.168.1.100-192.168.1.200,192.168.1.210-192.168.1.220")
+        Some("192.168.1.100-192.168.1.200\n192.168.1.210-192.168.1.220")
     );
     assert_eq!(
         out.get_text(&[
@@ -129,7 +130,7 @@ fn fails_when_reservation_iface_missing_network() {
     let source = parse(
         br#"<pfsense>
             <interfaces><lan><ipaddr>192.168.1.1</ipaddr><subnet>24</subnet></lan></interfaces>
-            <dhcpd><opt9><staticmap><mac>aa:bb:cc:dd:ee:ff</mac><ipaddr>10.10.10.10</ipaddr></staticmap></opt9></dhcpd>
+            <dhcpd><opt9><enable></enable><staticmap><mac>aa:bb:cc:dd:ee:ff</mac><ipaddr>10.10.10.10</ipaddr></staticmap></opt9></dhcpd>
         </pfsense>"#,
     )
     .expect("parse");
@@ -178,7 +179,7 @@ fn warns_when_dhcpv6_intent_missing_prefix() {
     let source = parse(
         br#"<pfsense>
             <dhcpdv6>
-              <lan>
+              <lan><enable></enable>
                 <range><from>::100</from><to>::200</to></range>
               </lan>
             </dhcpdv6>
@@ -227,10 +228,10 @@ fn partially_migrates_v6_when_one_iface_ready() {
               <opt1></opt1>
             </interfaces>
             <dhcpdv6>
-              <lan>
+              <lan><enable></enable>
                 <range><from>::100</from><to>::200</to></range>
               </lan>
-              <opt1>
+              <opt1><enable></enable>
                 <range><from>::300</from><to>::400</to></range>
               </opt1>
             </dhcpdv6>
@@ -293,4 +294,32 @@ fn reports_skipped_reservation_conflicts() {
     let stats = migrate_isc_to_kea_opnsense(&mut out, &source).expect("migrate");
     assert_eq!(stats.reservations_added_v4, 0);
     assert_eq!(stats.reservations_skipped_conflict_v4, 1);
+}
+
+#[test]
+fn does_not_enable_kea_for_isc_iface_without_enable_flag() {
+    // pfSense keeps <dhcpd><lan> with ranges even when the DHCP server is off;
+    // only the presence of <enable> turns it on.
+    let source = parse(
+        br#"<pfsense>
+            <interfaces><lan><ipaddr>192.168.1.1</ipaddr><subnet>24</subnet></lan></interfaces>
+            <dhcpd>
+              <lan>
+                <range><from>192.168.1.100</from><to>192.168.1.200</to></range>
+              </lan>
+            </dhcpd>
+        </pfsense>"#,
+    )
+    .expect("parse");
+    let mut out = parse(
+        br#"<opnsense><OPNsense><Kea><dhcp4><general><enabled>0</enabled></general><subnets/><reservations/></dhcp4></Kea></OPNsense></opnsense>"#,
+    )
+    .expect("parse");
+
+    let stats = migrate_isc_to_kea_opnsense(&mut out, &source).expect("migrate");
+    assert_eq!(stats.subnets_added_v4, 0);
+    assert_eq!(
+        out.get_text(&["OPNsense", "Kea", "dhcp4", "general", "enabled"]),
+        Some("0")
+    );
 }

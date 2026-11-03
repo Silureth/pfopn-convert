@@ -7,7 +7,6 @@ pub(crate) struct StaticMapV4 {
     pub(crate) mac: String,
     pub(crate) ipaddr: String,
     pub(crate) hostname: String,
-    pub(crate) cid: String,
     pub(crate) descr: String,
 }
 

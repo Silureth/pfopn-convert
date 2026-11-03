@@ -39,11 +39,6 @@ pub(crate) fn extract_isc_staticmaps_v4(root: &XmlNode) -> Vec<StaticMapV4> {
                 .map(str::trim)
                 .unwrap_or("")
                 .to_string();
-            let cid = staticmap
-                .get_text(&["cid"])
-                .map(str::trim)
-                .unwrap_or("")
-                .to_string();
             let descr = staticmap
                 .get_text(&["descr"])
                 .map(str::trim)
@@ -54,7 +49,6 @@ pub(crate) fn extract_isc_staticmaps_v4(root: &XmlNode) -> Vec<StaticMapV4> {
                 mac: mac.to_string(),
                 ipaddr: ip.to_string(),
                 hostname,
-                cid,
                 descr,
             });
         }

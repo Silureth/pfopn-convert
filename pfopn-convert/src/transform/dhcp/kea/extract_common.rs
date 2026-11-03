@@ -7,8 +7,10 @@ use xml_diff_core::XmlNode;
 /// - `<enable>` element (empty or truthy = enabled)
 /// - `<enabled>` element (truthy = enabled)
 ///
-/// Returns `true` if DHCP is enabled, `false` if explicitly disabled.
-/// Default is `true` (enabled) if no flags are present.
+/// Returns `true` if DHCP is enabled, `false` otherwise.
+/// Default is `false` (disabled) if no flags are present: both pfSense and
+/// OPNsense legacy DHCP only serve an interface when `<enable>` is present,
+/// so a `<dhcpd><lan>` block with ranges but no `<enable>` is switched off.
 pub(crate) fn isc_iface_enabled(iface: &XmlNode) -> bool {
     if let Some(disabled) = iface.get_text(&["disabled"]) {
         if isc_truthy(disabled) || disabled.trim().is_empty() {
@@ -22,7 +24,7 @@ pub(crate) fn isc_iface_enabled(iface: &XmlNode) -> bool {
     if let Some(enabled) = iface.get_text(&["enabled"]) {
         return isc_truthy(enabled);
     }
-    true
+    false
 }
 
 /// Check if a string represents a boolean true value in ISC DHCP config.

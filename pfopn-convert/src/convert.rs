@@ -49,7 +49,7 @@ use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     bridges, device_refs, dhcp, ifgroups, interface_presence, interface_settings, lan_ip,
-    logical_refs, opnsense_assignments, pfblocker, vlan_ifnames, wireguard,
+    logical_refs, opnsense_assignments, pfblocker, rule_flags, vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -179,6 +179,12 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
     // Apply platform-specific cleanup and normalization
     if to == "opnsense" {
         pfblocker::prune_pfblocker_floating_rules_for_opnsense(&mut out);
+        let flags = rule_flags::normalize_empty_flags_for_opnsense(&mut out);
+        if flags > 0 {
+            eprintln!(
+                "info: rewrote {flags} empty pfSense rule flag(s) (disabled/log/not/...) to explicit values for OPNsense"
+            );
+        }
         vlan_ifnames::normalize_opnsense_vlan_ifnames(&mut out);
         wireguard::normalize_opnsense_interface_names(&mut out);
         bridges::normalize_for_opnsense(&mut out);
