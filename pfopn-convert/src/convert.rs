@@ -49,7 +49,7 @@ use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     bridges, device_refs, dhcp, ifgroups, interface_presence, interface_settings, lan_ip,
-    logical_refs, opnsense_assignments, pfblocker, rule_flags, vlan_ifnames, wireguard,
+    logical_refs, nat_mvc, opnsense_assignments, pfblocker, rule_flags, vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -184,6 +184,16 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
             eprintln!(
                 "info: rewrote {flags} empty pfSense rule flag(s) (disabled/log/not/...) to explicit values for OPNsense"
             );
+        }
+        let nat = nat_mvc::move_legacy_nat_to_mvc(&mut out, &target);
+        if nat.onetoone_moved + nat.npt_moved > 0 {
+            eprintln!(
+                "info: moved {} 1:1 NAT and {} NPt rule(s) into the OPNsense Filter model",
+                nat.onetoone_moved, nat.npt_moved
+            );
+        }
+        for reason in &nat.skipped {
+            eprintln!("warning: not converted: {reason}");
         }
         vlan_ifnames::normalize_opnsense_vlan_ifnames(&mut out);
         wireguard::normalize_opnsense_interface_names(&mut out);

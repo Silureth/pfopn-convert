@@ -1,5 +1,7 @@
 use xml_diff_core::XmlNode;
 
+use super::version::version_at_least;
+
 /// Normalize static routes for OPNsense format.
 ///
 /// OPNsense static routes require fields that pfSense doesn't have:
@@ -89,22 +91,6 @@ pub fn to_pfsense(out: &mut XmlNode, _source: &XmlNode, _destination_baseline: &
         }
     }
     upsert_child(out, normalized);
-}
-
-/// Compare a dotted version string (e.g. "1.0.1") against a minimum.
-fn version_at_least(version: &str, min: &[u32]) -> bool {
-    let parts: Vec<u32> = version
-        .trim()
-        .split('.')
-        .map(|p| p.parse().unwrap_or(0))
-        .collect();
-    for (i, want) in min.iter().enumerate() {
-        let have = parts.get(i).copied().unwrap_or(0);
-        if have != *want {
-            return have > *want;
-        }
-    }
-    true
 }
 
 /// Replace or insert a child node into the parent by tag name.
