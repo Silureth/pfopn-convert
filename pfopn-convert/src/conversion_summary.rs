@@ -61,10 +61,20 @@ fn count_aliases(root: &XmlNode) -> usize {
     top.max(nested)
 }
 
+/// Legacy `<filter><rule>` plus MVC `OPNsense/Firewall/Filter/rules` (26.7+).
 fn count_rules(root: &XmlNode) -> usize {
-    root.get_child("filter")
+    let legacy = root
+        .get_child("filter")
         .map(|n| n.children.iter().filter(|c| c.tag == "rule").count())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let mvc = root
+        .get_child("OPNsense")
+        .and_then(|n| n.get_child("Firewall"))
+        .and_then(|n| n.get_child("Filter"))
+        .and_then(|n| n.get_child("rules"))
+        .map(|n| n.children.iter().filter(|c| c.tag == "rule").count())
+        .unwrap_or(0);
+    legacy + mvc
 }
 
 fn count_routes(root: &XmlNode) -> usize {

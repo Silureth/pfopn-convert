@@ -156,15 +156,8 @@ fn duplicate_interface_findings(root: &XmlNode) -> Vec<VerifyFinding> {
 /// Vector of error findings for each missing interface reference
 fn rule_interface_findings(root: &XmlNode, defined: &BTreeSet<String>) -> Vec<VerifyFinding> {
     let mut out = Vec::new();
-    let Some(filter) = root.get_child("filter") else {
-        return out;
-    };
-    for (idx, rule) in filter
-        .children
-        .iter()
-        .filter(|c| c.tag == "rule")
-        .enumerate()
-    {
+    let rules = crate::rule_view::filter_rules(root);
+    for (idx, rule) in rules.iter().enumerate() {
         let Some(interface) = rule.get_text(&["interface"]) else {
             continue;
         };

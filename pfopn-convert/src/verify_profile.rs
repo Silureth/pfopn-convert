@@ -130,15 +130,29 @@ fn gateway_field_findings(root: &XmlNode, profile: &ExpectedProfile) -> Vec<Veri
             continue;
         }
         for field in &profile.gateway_required_fields {
-            let ok = gw
-                .get_text(&[field.as_str()])
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false);
+            let ok = if field == "gateway" {
+                // An empty <gateway> (or "dynamic") is a dynamic/DHCP gateway on
+                // both pfSense and OPNsense (Routing/Gateways.php), not a gap.
+                gw.get_child("gateway").is_some()
+            } else {
+                gw.get_text(&[field.as_str()])
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false)
+            };
             if !ok {
+                let name = gw
+                    .get_text(&["name"])
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(|n| format!(" ({n})"))
+                    .unwrap_or_default();
                 out.push(VerifyFinding {
                     severity: FindingSeverity::Warning,
                     code: "profile_gateway_missing_required_field".to_string(),
-                    message: format!("gateway #{idx} is missing required field '{field}'"),
+                    message: format!(
+                        "gateway #{}{name} is missing required field '{field}'",
+                        idx + 1
+                    ),
                 });
             }
         }
@@ -224,4 +238,34 @@ fn has_any_field(node: &XmlNode, fields: &[String]) -> bool {
     fields
         .iter()
         .any(|field| node.get_text(&[field.as_str()]).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use xml_diff_core::parse;
+
+    use super::gateway_field_findings;
+    use crate::profile::ExpectedProfile;
+
+    #[test]
+    fn treats_empty_gateway_as_dynamic_but_flags_missing_one() {
+        let profile: ExpectedProfile =
+            toml::from_str(r#"gateway_required_fields = ["name", "interface", "gateway"]"#)
+                .expect("profile");
+        let root = parse(
+            br#"<opnsense><gateways>
+                <gateway_item><name>WAN_DHCP6</name><interface>wan</interface><gateway></gateway></gateway_item>
+                <gateway_item><name>WAN_DYN</name><interface>wan</interface><gateway>dynamic</gateway></gateway_item>
+                <gateway_item><name>BROKEN</name><interface>wan</interface></gateway_item>
+            </gateways></opnsense>"#,
+        )
+        .expect("parse");
+
+        let findings = gateway_field_findings(&root, &profile);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(
+            findings[0].message,
+            "gateway #3 (BROKEN) is missing required field 'gateway'"
+        );
+    }
 }

@@ -237,6 +237,11 @@ pub struct ConvertArgs {
     /// Disable DHCP services in generated output (safety guard for lab restores).
     #[arg(long)]
     pub disable_dhcp: bool,
+    /// Keep firewall and outbound NAT rules in the legacy format for OPNsense 26.7+
+    /// targets (then use Firewall > Migration assistant on the box) instead of
+    /// converting them to the new rule model.
+    #[arg(long)]
+    pub legacy_rules: bool,
     /// DHCP backend policy for target conversion.
     #[arg(long, value_enum, default_value_t = DhcpBackend::Auto)]
     pub backend: DhcpBackend,

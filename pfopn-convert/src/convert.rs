@@ -48,8 +48,9 @@ use pfopn_convert::backend_detect::detect_dhcp_backend;
 use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
-    bridges, device_refs, dhcp, ifgroups, interface_presence, interface_settings, lan_ip,
-    logical_refs, nat_mvc, opnsense_assignments, pfblocker, rule_flags, vlan_ifnames, wireguard,
+    bridges, device_refs, dhcp, filter_mvc, ifgroups, interface_presence, interface_settings,
+    lan_ip, logical_refs, nat_mvc, opnsense_assignments, pfblocker, rule_flags, vlan_ifnames,
+    wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -194,6 +195,29 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
         }
         for reason in &nat.skipped {
             eprintln!("warning: not converted: {reason}");
+        }
+        if !args.legacy_rules {
+            let rules = filter_mvc::move_legacy_rules_to_mvc(&mut out, &target);
+            if rules.rules_moved + rules.outbound_moved + rules.kept_legacy.len() > 0 {
+                eprintln!(
+                    "info: converted {} firewall and {} outbound NAT rule(s) to the OPNsense rule model (replaced {} baseline default rule(s))",
+                    rules.rules_moved, rules.outbound_moved, rules.baseline_rules_replaced
+                );
+            }
+            if rules.nat_links_cleared > 0 {
+                eprintln!(
+                    "info: cleared {} port-forward link(s) to converted filter rules (OPNsense 26.7 drops these links; the rules stay)",
+                    rules.nat_links_cleared
+                );
+            }
+            for reason in &rules.kept_legacy {
+                eprintln!(
+                    "warning: kept in legacy format (enforced, not editable in the GUI): {reason}"
+                );
+            }
+            for dropped in &rules.dropped_fields {
+                eprintln!("warning: {dropped}");
+            }
         }
         vlan_ifnames::normalize_opnsense_vlan_ifnames(&mut out);
         wireguard::normalize_opnsense_interface_names(&mut out);

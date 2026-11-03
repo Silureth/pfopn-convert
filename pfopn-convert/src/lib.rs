@@ -103,6 +103,7 @@ pub mod plugin_detect;
 pub mod plugin_matrix;
 pub mod profile;
 pub mod report;
+pub mod rule_view;
 pub mod scan;
 mod scan_plugins;
 pub mod section;

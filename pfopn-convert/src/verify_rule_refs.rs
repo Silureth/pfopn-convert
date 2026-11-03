@@ -54,16 +54,9 @@ pub fn rule_reference_findings(root: &XmlNode) -> Vec<VerifyFinding> {
 
 /// Find firewall rules that reference undefined aliases.
 fn filter_rule_alias_findings(root: &XmlNode, aliases: &BTreeSet<String>) -> Vec<VerifyFinding> {
-    let Some(filter) = root.get_child("filter") else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
-    for (idx, rule) in filter
-        .children
-        .iter()
-        .filter(|c| c.tag == "rule")
-        .enumerate()
-    {
+    let rules = crate::rule_view::filter_rules(root);
+    for (idx, rule) in rules.iter().enumerate() {
         for side in ["source", "destination"] {
             let Some(addr) = rule.get_child(side).and_then(|n| n.get_text(&["address"])) else {
                 continue;
@@ -88,16 +81,9 @@ fn filter_rule_alias_findings(root: &XmlNode, aliases: &BTreeSet<String>) -> Vec
 }
 
 fn filter_rule_gateway_findings(root: &XmlNode, gateways: &BTreeSet<String>) -> Vec<VerifyFinding> {
-    let Some(filter) = root.get_child("filter") else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
-    for (idx, rule) in filter
-        .children
-        .iter()
-        .filter(|c| c.tag == "rule")
-        .enumerate()
-    {
+    let rules = crate::rule_view::filter_rules(root);
+    for (idx, rule) in rules.iter().enumerate() {
         let Some(gateway) = rule.get_text(&["gateway"]) else {
             continue;
         };
@@ -151,16 +137,9 @@ fn filter_rule_schedule_findings(
     root: &XmlNode,
     schedules: &BTreeSet<String>,
 ) -> Vec<VerifyFinding> {
-    let Some(filter) = root.get_child("filter") else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
-    for (idx, rule) in filter
-        .children
-        .iter()
-        .filter(|c| c.tag == "rule")
-        .enumerate()
-    {
+    let rules = crate::rule_view::filter_rules(root);
+    for (idx, rule) in rules.iter().enumerate() {
         let Some(sched) = rule
             .get_text(&["sched"])
             .or_else(|| rule.get_text(&["schedule"]))

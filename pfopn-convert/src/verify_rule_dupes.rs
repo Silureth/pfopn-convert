@@ -43,14 +43,7 @@ use crate::verify_interfaces::{FindingSeverity, VerifyFinding};
 ///
 /// Vector of warnings for each duplicate or overlap detected.
 pub fn rule_duplicate_findings(root: &XmlNode) -> Vec<VerifyFinding> {
-    let Some(filter) = root.get_child("filter") else {
-        return Vec::new();
-    };
-    let rules = filter
-        .children
-        .iter()
-        .filter(|c| c.tag == "rule")
-        .collect::<Vec<_>>();
+    let rules = crate::rule_view::filter_rules(root);
     // Group rules by fingerprint
     let mut by_fp: BTreeMap<RuleFingerprint, Vec<RuleMeta>> = BTreeMap::new();
     for (idx, rule) in rules.iter().enumerate() {
