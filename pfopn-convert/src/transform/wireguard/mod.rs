@@ -58,7 +58,16 @@ pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, target: &XmlNode) {
         common::upsert_nested_wireguard(out, source_nested.clone());
     } else if let Some(source_top) = source_pfsense_wireguard(source) {
         // Source has pfSense-style WireGuard config — map it to OPNsense format
-        let mapped = pf_to_opn::map_pfsense_wireguard(source_top);
+        let mut mapped = pf_to_opn::map_pfsense_wireguard(source_top);
+        // Keep the baseline's per-model versions (client/general/server) so
+        // OPNsense does not re-run old WireGuard migrations on the new data.
+        let target_wg = target
+            .get_child("OPNsense")
+            .and_then(|opn| opn.get_child("wireguard"));
+        for section in &mut mapped.children {
+            let baseline = target_wg.and_then(|wg| wg.get_child(&section.tag));
+            crate::transform::version::inherit_model_attrs(section, baseline);
+        }
         common::upsert_nested_wireguard(out, mapped);
     }
 
@@ -185,6 +194,55 @@ mod tests {
             ]),
             Some("peer1")
         );
+    }
+
+    #[test]
+    fn maps_pfsense_tunnel_addresses_and_keeps_baseline_versions() {
+        let source = parse(
+            br#"<pfsense>
+                <installedpackages><wireguard>
+                    <tunnels><item>
+                        <name>tun_wg0</name><enabled>yes</enabled><listenport>51820</listenport>
+                        <privatekey>PRIV</privatekey><publickey>PUB</publickey>
+                        <addresses>
+                            <row><address>10.6.0.1</address><mask>24</mask><descr/></row>
+                            <row><address>fd00:6::1</address><mask>64</mask><descr/></row>
+                        </addresses>
+                    </item></tunnels>
+                    <peers/>
+                    <config><enable>on</enable></config>
+                </wireguard></installedpackages>
+            </pfsense>"#,
+        )
+        .expect("source parse");
+        let target = parse(
+            br#"<opnsense><OPNsense><wireguard><client version="1.0.0"/><general version="0.0.1"/><server version="1.0.1"/></wireguard></OPNsense></opnsense>"#,
+        )
+        .expect("target parse");
+        let mut out = target.clone();
+
+        to_opnsense(&mut out, &source, &target);
+        let wg = out
+            .get_child("OPNsense")
+            .and_then(|o| o.get_child("wireguard"))
+            .expect("wireguard");
+        assert_eq!(
+            wg.get_text(&["server", "servers", "server", "tunneladdress"]),
+            Some("10.6.0.1/24,fd00:6::1/64")
+        );
+        for (section, version) in [
+            ("client", "1.0.0"),
+            ("general", "0.0.1"),
+            ("server", "1.0.1"),
+        ] {
+            assert_eq!(
+                wg.get_child(section)
+                    .and_then(|s| s.attributes.get("version"))
+                    .map(String::as_str),
+                Some(version),
+                "{section} version"
+            );
+        }
     }
 
     #[test]

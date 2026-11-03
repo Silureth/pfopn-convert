@@ -11,7 +11,7 @@ use xml_diff_core::XmlNode;
 ///
 /// `any` is deliberately absent: OPNsense checks it with `isset()`, matching
 /// pfSense semantics.
-const RULE_FLAGS: &[&str] = &[
+pub(crate) const RULE_FLAGS: &[&str] = &[
     "disabled",
     "log",
     "quick",
@@ -82,6 +82,14 @@ fn set_empty_flags(node: &mut XmlNode, flags: &[&str]) -> usize {
         }
     }
     changed
+}
+
+/// pfSense flag semantics: the flag is set when the element is present
+/// (pfSense writes `true` as an empty element), unless it is explicitly "0".
+pub(crate) fn pf_flag_is_set(node: &XmlNode, tag: &str) -> bool {
+    node.get_child(tag)
+        .map(|c| c.text.as_deref().map(str::trim).unwrap_or("") != "0")
+        .unwrap_or(false)
 }
 
 fn child_mut<'a>(parent: &'a mut XmlNode, tag: &str) -> Option<&'a mut XmlNode> {

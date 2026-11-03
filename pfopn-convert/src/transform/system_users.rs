@@ -407,11 +407,10 @@ fn copy_field(dest: &mut XmlNode, source: &XmlNode, tag: &str) {
 
 /// Check if a user is enabled (not disabled).
 ///
-/// Users are enabled by default unless they have <disabled>1</disabled>.
+/// pfSense marks a disabled user with a present (usually empty) `<disabled>`;
+/// OPNsense with `<disabled>1</disabled>`. Only an explicit "0" means enabled.
 fn is_enabled(user: &XmlNode) -> bool {
-    user.get_text(&["disabled"])
-        .map(|v| !matches!(v.trim(), "1"))
-        .unwrap_or(true) // Default to enabled if no disabled field
+    !crate::transform::rule_flags::pf_flag_is_set(user, "disabled")
 }
 
 /// Check if a user has GUI/web interface privileges.
@@ -663,6 +662,26 @@ mod tests {
     fn skips_disabled_gui_user() {
         let source = parse(
             br#"<pfsense><system><user><name>webuser</name><uid>2</uid><priv>page-all</priv><disabled>1</disabled><password>GUI_PASS</password></user></system></pfsense>"#,
+        )
+        .expect("source parse");
+        let mut out =
+            parse(br#"<opnsense><system><user><name>root</name><password>OLD</password></user></system></opnsense>"#)
+                .expect("out parse");
+        let baseline = out.clone();
+
+        to_opnsense(&mut out, &source, &baseline);
+        let system = out.get_child("system").expect("system");
+        assert!(system
+            .children
+            .iter()
+            .all(|u| u.get_text(&["name"]) != Some("webuser")));
+    }
+
+    #[test]
+    fn skips_pfsense_style_empty_disabled_gui_user() {
+        // pfSense writes a disabled user as <disabled></disabled>.
+        let source = parse(
+            br#"<pfsense><system><user><name>webuser</name><uid>2</uid><priv>page-all</priv><disabled></disabled><password>GUI_PASS</password></user></system></pfsense>"#,
         )
         .expect("source parse");
         let mut out =

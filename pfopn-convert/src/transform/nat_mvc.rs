@@ -2,6 +2,7 @@ use std::net::IpAddr;
 
 use xml_diff_core::XmlNode;
 
+use super::rule_flags::pf_flag_is_set;
 use super::version::{model_version, version_at_least};
 
 const FILTER_PATH: &[&str] = &["OPNsense", "Firewall", "Filter"];
@@ -119,12 +120,20 @@ fn onetoone_rule(legacy: &XmlNode) -> Result<XmlNode, String> {
     push(
         &mut rule,
         "enabled",
-        if is_set(legacy, "disabled") { "0" } else { "1" },
+        if pf_flag_is_set(legacy, "disabled") {
+            "0"
+        } else {
+            "1"
+        },
     );
     push(
         &mut rule,
         "log",
-        if is_set(legacy, "log") { "1" } else { "0" },
+        if pf_flag_is_set(legacy, "log") {
+            "1"
+        } else {
+            "0"
+        },
     );
     push(&mut rule, "interface", &text(legacy, "interface"));
     push(&mut rule, "type", &kind);
@@ -180,12 +189,20 @@ fn npt_rule(legacy: &XmlNode) -> Result<XmlNode, String> {
     push(
         &mut rule,
         "enabled",
-        if is_set(legacy, "disabled") { "0" } else { "1" },
+        if pf_flag_is_set(legacy, "disabled") {
+            "0"
+        } else {
+            "1"
+        },
     );
     push(
         &mut rule,
         "log",
-        if is_set(legacy, "log") { "1" } else { "0" },
+        if pf_flag_is_set(legacy, "log") {
+            "1"
+        } else {
+            "0"
+        },
     );
     push(&mut rule, "interface", &text(legacy, "interface"));
     push(&mut rule, "source_net", &source);
@@ -242,15 +259,8 @@ fn max_sequence(container: &XmlNode) -> u64 {
         .unwrap_or(0)
 }
 
-/// pfSense flag semantics: present means set, unless explicitly "0".
-fn is_set(node: &XmlNode, tag: &str) -> bool {
-    node.get_child(tag)
-        .map(|c| c.text.as_deref().map(str::trim).unwrap_or("") != "0")
-        .unwrap_or(false)
-}
-
 fn flag(block: Option<&XmlNode>, tag: &str) -> &'static str {
-    if block.map(|b| is_set(b, tag)).unwrap_or(false) {
+    if block.map(|b| pf_flag_is_set(b, tag)).unwrap_or(false) {
         "1"
     } else {
         "0"

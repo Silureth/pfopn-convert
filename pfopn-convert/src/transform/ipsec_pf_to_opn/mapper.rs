@@ -153,7 +153,7 @@ pub(super) fn map_pf_ipsec_to_opnsense(source_ipsec: &XmlNode) -> (XmlNode, XmlN
             child
                 .attributes
                 .insert("uuid".to_string(), stable_uuid("child", cidx, &ikeid));
-            push_text_child(&mut child, "enabled", "1"); // Always enabled (pfSense doesn't disable individual phase2s)
+            push_text_child(&mut child, "enabled", enabled_from_disabled(p2)); // pfSense phase2s carry their own <disabled> flag
             push_text_child(&mut child, "connection", &conn_uuid); // Link to parent Connection
             push_text_child(&mut child, "reqid", text_or(p2, "reqid", "")); // IPsec policy ID
             push_text_child(&mut child, "esp_proposals", "default"); // Use OPNsense's default ESP proposals

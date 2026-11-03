@@ -6,12 +6,13 @@ use xml_diff_core::XmlNode;
 /// OPNsense uses `<enabled>` with "1" for enabled, "0" for disabled.
 ///
 /// Returns "1" if the node has no `<disabled>` child (enabled in pfSense).
-/// Returns "0" if the node has a `<disabled>` child (disabled in pfSense).
+/// Returns "0" if the node has a `<disabled>` child (disabled in pfSense),
+/// including pfSense's usual empty `<disabled></disabled>` form.
 pub(super) fn enabled_from_disabled(node: &XmlNode) -> &'static str {
-    if text_or(node, "disabled", "").is_empty() {
-        "1"
-    } else {
+    if crate::transform::rule_flags::pf_flag_is_set(node, "disabled") {
         "0"
+    } else {
+        "1"
     }
 }
 

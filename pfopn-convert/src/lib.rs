@@ -112,6 +112,7 @@ pub mod verify;
 pub mod verify_bridges;
 pub mod verify_interfaces;
 pub mod verify_nat;
+pub mod verify_opnsense_compat;
 pub mod verify_profile;
 pub mod verify_rule_dupes;
 pub mod verify_rule_refs;

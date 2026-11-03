@@ -12,6 +12,7 @@ use crate::verify_interfaces::{
     interface_reference_findings, FindingSeverity, VerifyFinding as RefFinding,
 };
 use crate::verify_nat::nat_findings;
+use crate::verify_opnsense_compat::opnsense_compat_findings;
 use crate::verify_profile::profile_findings;
 use crate::verify_rule_dupes::rule_duplicate_findings;
 use crate::verify_rule_refs::rule_reference_findings;
@@ -87,6 +88,7 @@ pub fn build_verify_report_with_version(
     }
     issues.extend(openvpn_issues(root));
     issues.extend(ipsec_issues(root));
+    issues.extend(opnsense_compat_findings(root).into_iter().map(map_finding));
 
     let errors = issues
         .iter()

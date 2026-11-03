@@ -1,4 +1,5 @@
 use crate::transform::ipsec_pf_to_opn;
+use crate::transform::version::inherit_model_attrs;
 use xml_diff_core::XmlNode;
 
 /// Transform IPsec configuration for OPNsense output.
@@ -28,13 +29,26 @@ pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, target: &XmlNode) {
         if looks_like_pfsense_ipsec(top) {
             // pfSense phase1/phase2 layout -- translate into OPNsense's
             // Swanctl connection model and IPsec pre-shared-key store.
-            let (mapped_ipsec, mapped_swanctl) = ipsec_pf_to_opn::map_pf_ipsec_to_opnsense(top);
+            let (mut mapped_ipsec, mut mapped_swanctl) =
+                ipsec_pf_to_opn::map_pf_ipsec_to_opnsense(top);
+            let target_opn = target.get_child("OPNsense");
+            inherit_model_attrs(
+                &mut mapped_ipsec,
+                target_opn.and_then(|o| o.get_child("IPsec")),
+            );
+            inherit_model_attrs(
+                &mut mapped_swanctl,
+                target_opn.and_then(|o| o.get_child("Swanctl")),
+            );
             upsert_nested_opnsense_node("IPsec", out, &mapped_ipsec);
             upsert_nested_opnsense_node("Swanctl", out, &mapped_swanctl);
-        } else {
+        } else if looks_like_opnsense_ipsec(top) {
             // Already OPNsense-style (general/charon) -- nest it directly.
             upsert_nested_opnsense_node("IPsec", out, top);
         }
+        // A pfSense <ipsec> without phase1/phase2 (e.g. only <vtimaps/> or
+        // <client/>) holds no tunnels; keep the baseline's OPNsense IPsec
+        // section instead of replacing it with pfSense-only leftovers.
         let _ = target;
         return;
     }
@@ -146,6 +160,12 @@ fn clone_with_tag(node: &XmlNode, tag: &str) -> XmlNode {
 /// of either phase element is a reliable indicator of pfSense-style config.
 fn looks_like_pfsense_ipsec(node: &XmlNode) -> bool {
     node.get_child("phase1").is_some() || node.get_child("phase2").is_some()
+}
+
+/// OPNsense-style IPsec settings (`<general>`/`<charon>`), e.g. carried in a
+/// pfSense file produced by an earlier OPNsense -> pfSense conversion.
+fn looks_like_opnsense_ipsec(node: &XmlNode) -> bool {
+    node.get_child("general").is_some() || node.get_child("charon").is_some()
 }
 
 #[cfg(test)]
@@ -301,6 +321,80 @@ mod tests {
             out.get_text(&["OPNsense", "Swanctl", "remotes", "remote", "id"]),
             Some("")
         );
+    }
+
+    #[test]
+    fn keeps_baseline_ipsec_when_pfsense_has_no_tunnels() {
+        let source = parse(br#"<pfsense><ipsec><vtimaps></vtimaps></ipsec></pfsense>"#)
+            .expect("source parse");
+        let target = parse(
+            br#"<opnsense><OPNsense><IPsec version="1.0.6"><general><enabled/></general><charon/><keyPairs/><preSharedKeys/></IPsec></OPNsense></opnsense>"#,
+        )
+        .expect("target parse");
+        let mut out = target.clone();
+
+        to_opnsense(&mut out, &source, &target);
+        let ipsec = out
+            .get_child("OPNsense")
+            .and_then(|o| o.get_child("IPsec"))
+            .expect("IPsec");
+        assert_eq!(
+            ipsec.attributes.get("version").map(String::as_str),
+            Some("1.0.6")
+        );
+        assert!(ipsec.get_child("general").is_some());
+        assert!(ipsec.get_child("vtimaps").is_none());
+    }
+
+    #[test]
+    fn keeps_disabled_state_and_baseline_model_versions() {
+        let source = parse(
+            br#"<pfsense><ipsec>
+                <phase1><ikeid>1</ikeid><remote-gateway>198.51.100.10</remote-gateway><authentication_method>pre_shared_key</authentication_method><pre-shared-key>a</pre-shared-key><disabled></disabled></phase1>
+                <phase1><ikeid>2</ikeid><remote-gateway>198.51.100.20</remote-gateway><authentication_method>pre_shared_key</authentication_method><pre-shared-key>b</pre-shared-key></phase1>
+                <phase2><ikeid>2</ikeid><mode>tunnel</mode><localid><type>lan</type></localid><remoteid><type>network</type><address>192.168.20.0</address><netbits>24</netbits></remoteid><disabled></disabled></phase2>
+                <phase2><ikeid>2</ikeid><mode>tunnel</mode><localid><type>lan</type></localid><remoteid><type>network</type><address>192.168.21.0</address><netbits>24</netbits></remoteid></phase2>
+              </ipsec></pfsense>"#,
+        )
+        .expect("source parse");
+        let target = parse(
+            br#"<opnsense><OPNsense><IPsec version="1.0.6" persisted_at="1"/><Swanctl version="1.0.0"/></OPNsense></opnsense>"#,
+        )
+        .expect("target parse");
+        let mut out = target.clone();
+
+        to_opnsense(&mut out, &source, &target);
+        let opn = out.get_child("OPNsense").expect("OPNsense");
+        assert_eq!(
+            opn.get_child("IPsec")
+                .unwrap()
+                .attributes
+                .get("version")
+                .map(String::as_str),
+            Some("1.0.6")
+        );
+        assert_eq!(
+            opn.get_child("Swanctl")
+                .unwrap()
+                .attributes
+                .get("version")
+                .map(String::as_str),
+            Some("1.0.0")
+        );
+        let swanctl = opn.get_child("Swanctl").unwrap();
+        let conns = swanctl
+            .get_child("Connections")
+            .unwrap()
+            .get_children("Connection");
+        assert_eq!(
+            conns[0].get_text(&["enabled"]),
+            Some("0"),
+            "empty <disabled> = disabled"
+        );
+        assert_eq!(conns[1].get_text(&["enabled"]), Some("1"));
+        let children = swanctl.get_child("children").unwrap().get_children("child");
+        assert_eq!(children[0].get_text(&["enabled"]), Some("0"));
+        assert_eq!(children[1].get_text(&["enabled"]), Some("1"));
     }
 
     #[test]

@@ -168,7 +168,7 @@ pub fn map_pfsense_wireguard(source: &XmlNode) -> XmlNode {
             push_text_child(
                 &mut server,
                 "tunneladdress",
-                text_of(tunnel, &["addresses"]).unwrap_or_default(),
+                rows_to_cidrs(tunnel.get_child("addresses")),
             );
             push_text_child(&mut server, "disableroutes", "1"); // OPNsense default
             push_text_child(&mut server, "gateway", ""); // Not set by default
@@ -196,15 +196,30 @@ pub fn map_pfsense_wireguard(source: &XmlNode) -> XmlNode {
 ///
 /// Returns comma-separated CIDR list, or empty string if no allowed IPs.
 fn peer_tunnel_address(peer: &XmlNode) -> String {
-    let Some(allowed) = peer.get_child("allowedips") else {
+    rows_to_cidrs(peer.get_child("allowedips"))
+}
+
+/// Join pfSense `<row><address>..</address><mask>..</mask></row>` entries
+/// into a comma-separated CIDR list. Used for peer allowed IPs and for the
+/// tunnel's own `<addresses>` (OPNsense requires a netmask on the server's
+/// `tunneladdress`). A missing mask defaults to a host route (/32 or /128).
+fn rows_to_cidrs(container: Option<&XmlNode>) -> String {
+    let Some(container) = container else {
         return String::new();
     };
     let mut cidrs = Vec::new();
-    for row in allowed.get_children("row") {
-        let Some(addr) = text_of(row, &["address"]) else {
+    for row in container.get_children("row") {
+        let Some(addr) = text_of(row, &["address"])
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+        else {
             continue;
         };
-        let mask = text_of(row, &["mask"]).unwrap_or("32"); // Default to /32 for single IPs
+        let default_mask = if addr.contains(':') { "128" } else { "32" };
+        let mask = text_of(row, &["mask"])
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .unwrap_or(default_mask);
         cidrs.push(format!("{addr}/{mask}"));
     }
     cidrs.join(",")
