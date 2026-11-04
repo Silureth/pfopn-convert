@@ -6,9 +6,74 @@ use xml_diff_core::XmlNode;
 /// pfSense does not use them. This generates deterministic UUIDs for any
 /// entries that are missing one, seeded from the refid or description so
 /// the same input always produces the same UUID.
-pub fn to_opnsense(out: &mut XmlNode, _source: &XmlNode, _destination_baseline: &XmlNode) {
+pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, destination_baseline: &XmlNode) {
+    keep_webgui_certificate(out, source, destination_baseline);
     normalize_uuid_attrs(out, "ca");
     normalize_uuid_attrs(out, "cert");
+}
+
+/// The merged `system/webgui/ssl-certref` comes from the source, but certificates
+/// are only carried over when a VPN references them. When the web GUI cert is
+/// missing from the output, OPNsense generates a new self-signed one at boot
+/// (browsers then see a new certificate). Copy the source's cert (and its CA)
+/// into the output; if the source does not have it either, point the web GUI
+/// back at the baseline's certificate.
+fn keep_webgui_certificate(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) {
+    let Some(certref) = out
+        .get_text(&["system", "webgui", "ssl-certref"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    if find_by_refid(out, "cert", &certref).is_some() {
+        return;
+    }
+    if let Some(cert) = find_by_refid(source, "cert", &certref).cloned() {
+        if let Some(caref) = cert
+            .get_text(&["caref"])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            if find_by_refid(out, "ca", &caref).is_none() {
+                if let Some(ca) = find_by_refid(source, "ca", &caref).cloned() {
+                    insert_after_last(out, ca);
+                }
+            }
+        }
+        insert_after_last(out, cert);
+        return;
+    }
+    if let Some(base_ref) = baseline
+        .get_text(&["system", "webgui", "ssl-certref"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(node) = out
+            .children
+            .iter_mut()
+            .find(|c| c.tag == "system")
+            .and_then(|s| s.children.iter_mut().find(|c| c.tag == "webgui"))
+            .and_then(|w| w.children.iter_mut().find(|c| c.tag == "ssl-certref"))
+        {
+            node.text = Some(base_ref);
+        }
+    }
+}
+
+fn find_by_refid<'a>(root: &'a XmlNode, tag: &str, refid: &str) -> Option<&'a XmlNode> {
+    root.children
+        .iter()
+        .filter(|c| c.tag == tag)
+        .find(|c| c.get_text(&["refid"]).map(str::trim) == Some(refid))
+}
+
+/// Insert `node` after the last top-level sibling with the same tag (or at the end).
+fn insert_after_last(root: &mut XmlNode, node: XmlNode) {
+    match root.children.iter().rposition(|c| c.tag == node.tag) {
+        Some(idx) => root.children.insert(idx + 1, node),
+        None => root.children.push(node),
+    }
 }
 
 /// Transform certificate and CA entries for pfSense output.
@@ -96,6 +161,47 @@ mod tests {
     use xml_diff_core::parse;
 
     use super::{to_opnsense, to_pfsense};
+
+    #[test]
+    fn carries_webgui_certificate_and_ca_over() {
+        let source = parse(
+            br#"<pfsense><ca><refid>ca1</refid><descr>CA</descr></ca><cert><refid>pfcert</refid><descr>webConfigurator default</descr><caref>ca1</caref><crt>AAA</crt><prv>BBB</prv></cert></pfsense>"#,
+        )
+        .expect("parse");
+        let baseline = parse(
+            br#"<opnsense><system><webgui><ssl-certref>opncert</ssl-certref></webgui></system><cert uuid="u"><refid>opncert</refid></cert></opnsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(
+            br#"<opnsense><system><webgui><ssl-certref>pfcert</ssl-certref></webgui></system><cert uuid="u"><refid>opncert</refid></cert></opnsense>"#,
+        )
+        .expect("parse");
+        to_opnsense(&mut out, &source, &baseline);
+        let refids: Vec<_> = out
+            .children
+            .iter()
+            .filter(|c| c.tag == "cert" || c.tag == "ca")
+            .map(|c| format!("{}:{}", c.tag, c.get_text(&["refid"]).unwrap()))
+            .collect();
+        assert!(refids.contains(&"cert:pfcert".to_string()));
+        assert!(refids.contains(&"ca:ca1".to_string()));
+        assert_eq!(out.get_text(&["system", "webgui", "ssl-certref"]), Some("pfcert"));
+    }
+
+    #[test]
+    fn falls_back_to_baseline_webgui_certificate() {
+        let source = parse(br#"<pfsense/>"#).expect("parse");
+        let baseline = parse(
+            br#"<opnsense><system><webgui><ssl-certref>opncert</ssl-certref></webgui></system></opnsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(
+            br#"<opnsense><system><webgui><ssl-certref>gone</ssl-certref></webgui></system><cert><refid>opncert</refid></cert></opnsense>"#,
+        )
+        .expect("parse");
+        to_opnsense(&mut out, &source, &baseline);
+        assert_eq!(out.get_text(&["system", "webgui", "ssl-certref"]), Some("opncert"));
+    }
 
     #[test]
     fn adds_uuid_to_ca_and_cert_for_opnsense() {
