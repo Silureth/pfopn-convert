@@ -5,6 +5,7 @@ pub mod device_refs;
 pub mod dhcp;
 pub mod filter_mvc;
 pub mod gateways_mvc;
+pub mod html_entities;
 pub mod ifgroups;
 pub mod interface_presence;
 pub mod interface_settings;

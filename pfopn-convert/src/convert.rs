@@ -48,7 +48,7 @@ use pfopn_convert::backend_detect::detect_dhcp_backend;
 use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
-    bridges, device_refs, dhcp, filter_mvc, gateways_mvc, ifgroups, interface_presence,
+    bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups, interface_presence,
     interface_settings, lan_ip, logical_refs, nat_mvc, opn_plugins, opnsense_assignments,
     pfblocker, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames, wireguard,
 };
@@ -102,7 +102,7 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
     ensure_output_not_same(&args.output, &inputs)?;
 
     // Parse source configuration
-    let input = parse_file(&args.input)
+    let mut input = parse_file(&args.input)
         .with_context(|| format!("failed to parse {}", args.input.display()))?;
 
     // Determine source and target platforms
@@ -112,6 +112,16 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
         bail!(
             "from and to are the same platform ({from}); conversion requires different platforms"
         );
+    }
+
+    // pfSense stores descriptions HTML-encoded; OPNsense shows them literally.
+    if from == "pfsense" && to == "opnsense" {
+        let decoded = html_entities::decode_descriptions(&mut input);
+        if decoded > 0 {
+            eprintln!(
+                "info: decoded HTML entities in {decoded} pfSense description(s) (e.g. &eacute; -> \u{e9}, &gt; -> >)"
+            );
+        }
     }
 
     // Load or create target baseline config

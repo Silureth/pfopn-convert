@@ -135,6 +135,7 @@ These fixes apply to every pfSense → OPNsense conversion, not only 26.7:
 | pfSense gateways stayed in the legacy `<gateways>` section, which OPNsense no longer reads (its own migration only runs on older models) | interfaces and policy-routing rules pointed at **gateways that did not exist**; the baseline's default gateway stayed | gateways are moved into `OPNsense/Gateways`, default gateway from `defaultgw4/6`, pfSense empty-element flags (`monitor_disable`) kept |
 | OPNsense's empty `<bridged/>` placeholder (no bridges) was given a UUID | an **invalid bridge with no interface and no members** | the placeholder is left alone |
 | The web GUI certificate was only carried over when a VPN used it | OPNsense **generated a new self-signed certificate** at boot | the referenced certificate (and its CA) is copied; otherwise the baseline's is kept |
+| pfSense stores descriptions HTML-encoded, sometimes twice (`kifel&amp;eacute;`, `serp-&gt;z7`) | entities showed literally in the OPNsense GUI | descriptions are decoded to plain text (`kifelé`, `serp->z7`) |
 | The merged `system` section (from pfSense) dropped OPNsense's `system/firmware` | update settings and the configured-plugin list were lost | the baseline's `system/firmware` is kept and the needed plugins are added to it |
 
 New features:
