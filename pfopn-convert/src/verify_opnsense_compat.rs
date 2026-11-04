@@ -14,6 +14,9 @@
 //! - `gateway_legacy_ignored`: gateways left in the legacy `<gateways>`
 //!   section while the Gateways model exists (OPNsense reads only the model,
 //!   so interfaces and policy routes point at gateways that do not exist).
+//! - `rule_model_invalid`: a 26.7 firewall/outbound NAT rule that OPNsense's
+//!   Filter model rejects on save (ports without TCP/UDP, ICMP types without
+//!   ICMP, ...). pf may still load it, but every GUI save of rules fails.
 //! - `icmp_type_any`: a firewall rule with ICMP type `any` (pfSense's "all
 //!   types"); OPNsense writes it to pf verbatim, a syntax error.
 //! - `outbound_nat_family_mismatch`: an IPv4 outbound NAT rule with an IPv6
@@ -50,6 +53,7 @@ pub fn opnsense_compat_findings(root: &XmlNode) -> Vec<VerifyFinding> {
     gateway_findings(root, &mut out);
     outbound_family_findings(root, &mut out);
     icmp_any_findings(root, &mut out);
+    rule_model_findings(root, &mut out);
     pfsense_rule_feature_findings(root, &mut out);
     alias_findings(root, &mut out);
     kea_findings(root, &mut out);
@@ -139,6 +143,56 @@ fn gateway_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
                 legacy.join(", ")
             ),
         ));
+    }
+}
+
+/// Mirrors the rule checks in OPNsense's `Filter::performValidation` (26.7).
+fn rule_model_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
+    const PORT_PROTOS: [&str; 3] = ["TCP", "UDP", "TCP/UDP"];
+    for (section, kind) in [("rules", "firewall rule"), ("snatrules", "outbound NAT rule")] {
+        let rules = children(path(root, &["OPNsense", "Firewall", "Filter", section]), "rule");
+        for (idx, rule) in rules.iter().enumerate() {
+            let get = |f: &str| rule.get_text(&[f]).map(str::trim).unwrap_or("").to_string();
+            let protocol = get("protocol");
+            let mut problems = Vec::new();
+            for port in ["source_port", "destination_port", "target_port"] {
+                if !get(port).is_empty() && !PORT_PROTOS.contains(&protocol.as_str()) {
+                    problems.push(format!("{port} with protocol '{protocol}'"));
+                }
+            }
+            if !get("icmptype").is_empty() && protocol != "ICMP" {
+                problems.push(format!("ICMP type with protocol '{protocol}'"));
+            }
+            if !get("icmp6type").is_empty() && protocol != "IPV6-ICMP" {
+                problems.push(format!("ICMPv6 type with protocol '{protocol}'"));
+            }
+            for net in ["source_net", "destination_net"] {
+                let value = get(net);
+                if value.contains(',') && value.split(',').any(|v| v.trim() == "any") {
+                    problems.push(format!("{net} combines 'any' with other values"));
+                }
+            }
+            if section == "snatrules" {
+                if get("target") == "any" {
+                    problems.push("target is 'any'".to_string());
+                }
+                if !get("poolopts_sourcehashkey").is_empty() && get("poolopts") != "source-hash" {
+                    problems.push("source hash key without source-hash pool option".to_string());
+                }
+            }
+            if !problems.is_empty() {
+                let descr = get("description");
+                out.push(error(
+                    "rule_model_invalid",
+                    format!(
+                        "{kind} #{} {}is rejected by OPNsense on save: {}",
+                        idx + 1,
+                        if descr.is_empty() { String::new() } else { format!("('{descr}') ") },
+                        problems.join("; ")
+                    ),
+                ));
+            }
+        }
     }
 }
 
@@ -447,7 +501,7 @@ mod tests {
                 <OPNsense>
                   <Firewall>
                     <Alias version="1.0.1"><aliases><alias><name>a</name><address>10.0.0.1 10.0.0.2</address></alias></aliases></Alias>
-                    <Filter version="1.0.6"><onetoone/><rules><rule><protocol>ICMP</protocol><icmptype>any</icmptype></rule></rules><snatrules><rule><ipprotocol>inet</ipprotocol><source_net>::1/128</source_net><description>localhost</description></rule></snatrules></Filter>
+                    <Filter version="1.0.6"><onetoone/><rules><rule><protocol>ICMP</protocol><icmptype>any</icmptype></rule></rules><snatrules><rule><ipprotocol>inet</ipprotocol><source_net>::1/128</source_net><description>localhost</description></rule><rule><ipprotocol>inet</ipprotocol><protocol>any</protocol><destination_port>500</destination_port></rule></snatrules></Filter>
                   </Firewall>
                   <Gateways version="1.0.0"/>
                   <IPsec><general/></IPsec>
@@ -461,6 +515,7 @@ mod tests {
             "interface_flag_empty",
             "outbound_nat_family_mismatch",
             "icmp_type_any",
+            "rule_model_invalid",
             "kea_pool_separator",
             "kea_reservation_mac_and_client_id",
             "mvc_section_missing_version",

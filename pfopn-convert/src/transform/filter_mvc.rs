@@ -43,6 +43,8 @@ pub struct FilterMvcStats {
     pub dropped_fields: Vec<String>,
     /// Port forwards whose link to a (now converted) filter rule was cleared.
     pub nat_links_cleared: usize,
+    /// "To this firewall, no gateway" rules added in front of policy-routing rules.
+    pub self_bypass_added: usize,
 }
 
 /// Convert legacy filter and outbound NAT rules into the MVC Filter model when
@@ -168,7 +170,13 @@ fn convert_filter_rules(out: &mut XmlNode, stats: &mut FilterMvcStats) {
     for (idx, rule) in ordered {
         let label = rule_label("filter rule", idx, rule);
         match map_filter_rule(rule, sequence, &label, stats) {
-            Ok(node) => {
+            Ok(mut node) => {
+                if let Some(bypass) = self_bypass_rule(&node) {
+                    converted.push(bypass);
+                    sequence += 10;
+                    set_child_text(&mut node, "sequence", &sequence.to_string());
+                    stats.self_bypass_added += 1;
+                }
                 converted.push(node);
                 sequence += 10;
             }
@@ -199,6 +207,58 @@ fn convert_filter_rules(out: &mut XmlNode, stats: &mut FilterMvcStats) {
     rules.children.retain(|c| c.tag != "rule");
     stats.rules_moved = converted.len();
     rules.children.extend(converted);
+}
+
+/// For a policy-routing pass rule to "any", the same rule with destination
+/// "This Firewall" and no gateway, to be placed directly in front of it.
+///
+/// On OPNsense a `route-to` rule also catches traffic addressed to the
+/// firewall's own addresses (for example a monitoring server polling the
+/// firewall's WAN address from an internal network) and sends it to the
+/// gateway, where it is lost. The same pfSense rules delivered that traffic
+/// locally. OPNsense's documented fix is a rule to "This Firewall" without a
+/// gateway above the policy-routing rules; it only passes what the gateway
+/// rule below it would pass anyway.
+fn self_bypass_rule(rule: &XmlNode) -> Option<XmlNode> {
+    let field = |tag: &str| text(rule, tag);
+    let routes = !field("gateway").is_empty()
+        && field("action") == "pass"
+        && field("direction") == "in"
+        && field("destination_net") == "any"
+        && field("destination_not") != "1";
+    if !routes {
+        return None;
+    }
+    let mut bypass = rule.clone();
+    let uuid = rule.attributes.get("uuid").cloned().unwrap_or_default();
+    bypass
+        .attributes
+        .insert("uuid".to_string(), stable_uuid(&format!("self-bypass|{uuid}")));
+    bypass.children.retain(|c| c.tag != "gateway");
+    set_child_text(&mut bypass, "destination_net", "(self)");
+    let descr = field("description");
+    set_child_text(
+        &mut bypass,
+        "description",
+        &format!(
+            "pfopn-convert: no policy routing to this firewall{}",
+            if descr.is_empty() { String::new() } else { format!(" ({descr})") }
+        )
+        .chars()
+        .take(255)
+        .collect::<String>(),
+    );
+    Some(bypass)
+}
+
+fn set_child_text(node: &mut XmlNode, tag: &str, value: &str) {
+    match node.children.iter_mut().find(|c| c.tag == tag) {
+        Some(child) => {
+            child.children.clear();
+            child.text = Some(value.to_string());
+        }
+        None => push(node, tag, value),
+    }
 }
 
 /// Drop port-forward `associated-rule-id` links that no longer point at a
@@ -337,9 +397,10 @@ fn map_filter_rule(
     push(&mut node, "interface", &text(rule, "interface"));
     push(&mut node, "direction", &direction);
     push(&mut node, "ipprotocol", &ipprotocol);
-    let protocol = non_empty(text(rule, "protocol"))
-        .map(|p| p.to_ascii_uppercase())
-        .unwrap_or_else(|| "any".to_string());
+    let has_ports = ["source", "destination"]
+        .iter()
+        .any(|b| !address_fields(rule.get_child(b)).2.is_empty());
+    let protocol = model_protocol(&text(rule, "protocol"), &ipprotocol, has_ports);
     push(&mut node, "protocol", &protocol);
 
     // pfSense stores "all ICMP types" as `any`; OPNsense passes the field to pf
@@ -426,6 +487,26 @@ fn address_fields(block: Option<&XmlNode>) -> (String, bool, String) {
         .replace("-any", "-65535")
         .replace("any-", "1-");
     (net, not, port)
+}
+
+/// Protocol as the OPNsense Filter model accepts it (`Filter::performValidation`):
+/// - ports are only valid for TCP, UDP or TCP/UDP. pfSense allows ports with
+///   protocol "any" (its auto-created ISAKMP outbound NAT rules use port 500),
+///   and pf only applies ports to TCP/UDP anyway, so "any" with ports becomes
+///   "TCP/UDP". Left as "any", every save of the rule model fails.
+/// - ICMP on an IPv6 rule is `IPV6-ICMP` (required for ICMPv6 types).
+fn model_protocol(pf_protocol: &str, ipprotocol: &str, has_ports: bool) -> String {
+    let protocol = if pf_protocol.is_empty() {
+        "any".to_string()
+    } else {
+        pf_protocol.to_ascii_uppercase()
+    };
+    match protocol.as_str() {
+        "ANY" | "any" if has_ports => "TCP/UDP".to_string(),
+        "ANY" => "any".to_string(),
+        "ICMP" if ipprotocol == "inet6" => "IPV6-ICMP".to_string(),
+        _ => protocol,
+    }
 }
 
 /// Empty when the ICMP type list includes pfSense's `any` (all types).
@@ -557,12 +638,13 @@ fn map_outbound_rule(
         stats,
     );
     push(&mut node, "ipprotocol", ipprotocol);
+    let has_ports = ["sourceport", "dstport", "natport"]
+        .iter()
+        .any(|p| !text(rule, p).is_empty());
     push(
         &mut node,
         "protocol",
-        &non_empty(text(rule, "protocol"))
-            .map(|p| p.to_ascii_uppercase())
-            .unwrap_or_else(|| "any".to_string()),
+        &model_protocol(&text(rule, "protocol"), ipprotocol, has_ports),
     );
     push(&mut node, "source_net", &source_net);
     push(
@@ -972,6 +1054,7 @@ mod tests {
         let stats = move_legacy_rules_to_mvc(&mut out, &baseline);
         let rule = &mvc_rules(&out, "rules")[0];
         assert_eq!(rule.get_text(&["icmp6type"]), Some("128,135"));
+        assert_eq!(rule.get_text(&["protocol"]), Some("IPV6-ICMP"));
         assert!(rule.get_child("icmptype").is_none());
         assert!(stats.dropped_fields.iter().any(|d| d.contains("bogus")));
         assert!(stats.dropped_fields.iter().any(|d| d.contains("dnpipe")));
@@ -1036,6 +1119,59 @@ mod tests {
             rules[2].get_text(&["poolopts_sourcehashkey"]),
             Some("0xabc")
         );
+    }
+
+    #[test]
+    fn adds_self_bypass_before_policy_routing_to_any() {
+        let baseline = parse(BASELINE_26_7).expect("parse");
+        let mut out = parse(
+            br#"<opnsense><filter>
+                <rule><type>pass</type><interface>opt4</interface><ipprotocol>inet</ipprotocol><source><any/></source><destination><network>opt4</network></destination></rule>
+                <rule><type>pass</type><interface>opt4</interface><ipprotocol>inet</ipprotocol><protocol>tcp/udp</protocol><source><any/></source><destination><any/></destination><gateway>WAN2_GW</gateway></rule>
+                <rule><type>pass</type><interface>opt4</interface><ipprotocol>inet</ipprotocol><source><any/></source><destination><network>opt2</network></destination><gateway>MGMT_GW</gateway></rule>
+            </filter></opnsense>"#,
+        )
+        .expect("parse");
+        let stats = move_legacy_rules_to_mvc(&mut out, &baseline);
+        assert_eq!(stats.self_bypass_added, 1);
+        let rules = mvc_rules(&out, "rules");
+        let summary: Vec<String> = rules
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}:{}:{}",
+                    r.get_text(&["sequence"]).unwrap(),
+                    r.get_text(&["destination_net"]).unwrap(),
+                    r.get_text(&["gateway"]).unwrap_or("-")
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            ["1:opt4:-", "11:(self):-", "21:any:WAN2_GW", "31:opt2:MGMT_GW"]
+        );
+        assert_eq!(rules[1].get_text(&["protocol"]), Some("TCP/UDP"));
+        assert_ne!(rules[1].attributes.get("uuid"), rules[2].attributes.get("uuid"));
+    }
+
+    #[test]
+    fn ports_with_protocol_any_become_tcp_udp() {
+        let baseline = parse(BASELINE_26_7).expect("parse");
+        let mut out = parse(
+            br#"<opnsense>
+                <filter><rule><type>pass</type><interface>lan</interface><ipprotocol>inet</ipprotocol><source><any/></source><destination><any/><port>53</port></destination></rule></filter>
+                <nat><outbound><mode>hybrid</mode>
+                  <rule><interface>wan</interface><source><network>127.0.0.0/8</network></source><destination><any/></destination><dstport>500</dstport><staticnatport/><descr>Auto created rule for ISAKMP - localhost to WAN</descr></rule>
+                  <rule><interface>wan</interface><source><network>10.0.0.0/24</network></source><destination><any/></destination><descr>no ports</descr></rule>
+                </outbound></nat></opnsense>"#,
+        )
+        .expect("parse");
+        move_legacy_rules_to_mvc(&mut out, &baseline);
+        assert_eq!(mvc_rules(&out, "rules")[0].get_text(&["protocol"]), Some("TCP/UDP"));
+        let snat = mvc_rules(&out, "snatrules");
+        assert_eq!(snat[0].get_text(&["protocol"]), Some("TCP/UDP"));
+        assert_eq!(snat[0].get_text(&["destination_port"]), Some("500"));
+        assert_eq!(snat[1].get_text(&["protocol"]), Some("any"));
     }
 
     #[test]

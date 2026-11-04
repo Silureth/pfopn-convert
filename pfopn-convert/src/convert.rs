@@ -233,6 +233,12 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                     rules.rules_moved, rules.outbound_moved, rules.baseline_rules_replaced
                 );
             }
+            if rules.self_bypass_added > 0 {
+                eprintln!(
+                    "info: added {} \"to this firewall, no gateway\" rule(s) in front of policy-routing rules (OPNsense would otherwise route traffic for the firewall itself to the gateway)",
+                    rules.self_bypass_added
+                );
+            }
             if rules.nat_links_cleared > 0 {
                 eprintln!(
                     "info: cleared {} port-forward link(s) to converted filter rules (OPNsense 26.7 drops these links; the rules stay)",
