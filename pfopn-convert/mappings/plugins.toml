@@ -61,3 +61,35 @@ opnsense_markers = []
 compatible_targets = ["pfsense"]
 status = "unsupported"
 note = "No direct OPNsense equivalent."
+
+[[plugin]]
+id = "zabbix-agent"
+pfsense_markers = ["zabbix agent 7", "zabbix agent 6", "zabbix agent lts", "zabbix-agent7", "zabbix-agent6", "zabbix-agent-lts"]
+opnsense_markers = ["os-zabbix7-agent", "os-zabbix74-agent", "os-zabbix6-agent"]
+compatible_targets = ["pfsense", "opnsense"]
+status = "partial"
+note = "Settings, PSK encryption and user parameters are converted when the plugin is in the baseline; certificate TLS is not."
+
+[[plugin]]
+id = "node_exporter"
+pfsense_markers = ["node_exporter"]
+opnsense_markers = ["os-node_exporter"]
+compatible_targets = ["pfsense", "opnsense"]
+status = "partial"
+note = "Converted when the plugin is in the baseline; collectors the plugin lacks (boottime, textfile) and extra flags are dropped."
+
+[[plugin]]
+id = "qemu-guest-agent"
+pfsense_markers = []
+opnsense_markers = ["os-qemu-guest-agent"]
+compatible_targets = ["pfsense", "opnsense"]
+status = "supported"
+note = "pfSense starts it from Shellcmd; OPNsense has a plugin. Enabled when the plugin is in the baseline."
+
+[[plugin]]
+id = "shellcmd"
+pfsense_markers = ["shellcmd"]
+opnsense_markers = []
+compatible_targets = ["pfsense"]
+status = "partial"
+note = "No OPNsense equivalent; a qemu-guest-agent start command becomes the os-qemu-guest-agent plugin, other commands need /usr/local/etc/rc.syshook.d/ scripts."

@@ -49,8 +49,8 @@ use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     bridges, device_refs, dhcp, filter_mvc, gateways_mvc, ifgroups, interface_presence,
-    interface_settings, lan_ip, logical_refs, nat_mvc, opnsense_assignments, pfblocker,
-    rule_flags, vlan_ifnames, wireguard,
+    interface_settings, lan_ip, logical_refs, nat_mvc, opn_plugins, opnsense_assignments,
+    pfblocker, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -178,6 +178,7 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
     device_refs::apply(&mut out, &input, &target, None);
 
     // Apply platform-specific cleanup and normalization
+    let mut plugin_report: Option<opn_plugins::PluginReport> = None;
     if to == "opnsense" {
         pfblocker::prune_pfblocker_floating_rules_for_opnsense(&mut out);
         let flags = rule_flags::normalize_empty_flags_for_opnsense(&mut out);
@@ -246,6 +247,29 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
             for dropped in &rules.dropped_fields {
                 eprintln!("warning: {dropped}");
             }
+        }
+        if from == "pfsense" {
+            let dns = unbound_mvc::from_pfsense(&mut out, &input, &target);
+            if dns.converted {
+                eprintln!(
+                    "info: converted DNS Resolver settings ({} host override(s), {} alias(es), {} domain override(s), {} access list(s))",
+                    dns.hosts, dns.aliases, dns.forwards, dns.acls
+                );
+            }
+            for warning in &dns.warnings {
+                eprintln!("warning: {warning}");
+            }
+            let syslog = syslog_mvc::from_pfsense(&mut out, &input, &target);
+            if !syslog.destinations.is_empty() {
+                eprintln!(
+                    "info: converted remote syslog destination(s): {}",
+                    syslog.destinations.join(", ")
+                );
+            }
+            for warning in &syslog.warnings {
+                eprintln!("warning: {warning}");
+            }
+            plugin_report = Some(opn_plugins::from_pfsense(&mut out, &input, &target));
         }
         vlan_ifnames::normalize_opnsense_vlan_ifnames(&mut out);
         wireguard::normalize_opnsense_interface_names(&mut out);
@@ -343,7 +367,44 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
 
     // Display conversion summary
     println!("{}", render_conversion_summary(summarize_conversion(&out)));
+    if let Some(report) = &plugin_report {
+        print_plugin_report(report);
+    }
     Ok(())
+}
+
+/// Tell the user which OPNsense plugins the source needs and what to do.
+fn print_plugin_report(report: &opn_plugins::PluginReport) {
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    if report.converted.is_empty() && report.missing.is_empty() && report.no_equivalent.is_empty()
+    {
+        return;
+    }
+    eprintln!();
+    eprintln!("plugins:");
+    for (plugin, package) in &report.converted {
+        eprintln!("  converted        {plugin:<22} from {package}");
+    }
+    for (plugin, package) in &report.missing {
+        eprintln!("  NOT INSTALLED    {plugin:<22} from {package}");
+    }
+    for note in &report.no_equivalent {
+        eprintln!("  no equivalent    {note}");
+    }
+    if !report.missing.is_empty() {
+        let names: Vec<&str> = report.missing.iter().map(|(p, _)| p.as_str()).collect();
+        eprintln!();
+        eprintln!(
+            "  The baseline does not have {}, so their settings were not converted.",
+            names.join(", ")
+        );
+        eprintln!("  To convert them: install them on the target (System > Firmware > Plugins),");
+        eprintln!("  export a new baseline and run convert again. They are also listed as");
+        eprintln!("  configured plugins in the output, so after a restore OPNsense shows them as");
+        eprintln!("  missing under System > Firmware > Plugins and can install them from there.");
+    }
 }
 
 /// Resolve source platform from CLI argument or auto-detection.

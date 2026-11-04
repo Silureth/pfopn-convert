@@ -121,6 +121,23 @@ With `--legacy-rules`, firewall and outbound NAT rules stay in the old format. R
 
 With an older baseline (Filter model before 1.0.5), rules are left in the old format as before.
 
+## Plugins
+
+pfSense packages map to OPNsense plugins. A plugin's settings can only be converted when the plugin is **installed in the baseline**: its configuration model (and version) only exists then.
+
+| pfSense package | OPNsense plugin | Converted |
+|---|---|---|
+| Zabbix Agent 6/7 | `os-zabbix6-agent` / `os-zabbix7-agent` | servers, active checks, hostname, listen address/port, tuning, PSK encryption (identity and key), user parameters. Certificate TLS is not supported by the plugin. |
+| node_exporter | `os-node_exporter` | enabled, listen interface (as its IP address), port, collectors. `boottime`, `textfile` and extra flags have no equivalent. |
+| Shellcmd `service qemu-guest-agent start` | `os-qemu-guest-agent` | enabled. Other Shellcmd commands are listed; use `/usr/local/etc/rc.syshook.d/` scripts. |
+| pfBlockerNG | none | not converted; use Unbound DNS blocklists and URL table aliases |
+
+After `convert`, a `plugins:` report lists each plugin as `converted`, `NOT INSTALLED` (not in the baseline, settings not converted) or `no equivalent`. The plugins the source needs are also added to the configured-plugin list (`system/firmware/plugins`), so after a restore OPNsense shows missing ones under System → Firmware → Plugins and can install them.
+
+To convert plugin settings: install the plugins on the destination, export the baseline, then run `convert`.
+
+The DNS Resolver and remote syslog conversions follow OPNsense's own legacy migrations, but read pfSense's empty-element flags as set (the migrations would turn DNSSEC and the hardening options off) and keep domain-override domains (OPNsense's import drops them).
+
 ## Before Restore
 
 - Take a full config backup of the destination firewall before any restore.
@@ -323,6 +340,9 @@ Current support level by area:
 | `gateways` | supported-with-checks |
 | `staticroutes` | supported-with-checks |
 | `ifgroups` | supported-with-checks |
+| `unbound` (DNS Resolver) | supported-with-checks (pfSense → OPNsense: general/advanced settings, host overrides and aliases, domain overrides, access lists) |
+| `syslog` (remote logging) | supported (pfSense → OPNsense: remote servers become Syslog destinations) |
+| Zabbix agent, node_exporter, QEMU guest agent | supported when the OPNsense plugin is installed in the baseline (see [Plugins](#plugins)) |
 | pfBlockerNG | not supported (no OPNsense equivalent; its floating rules are removed) |
 | packages/plugins (general) | partial |
 
