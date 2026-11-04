@@ -189,10 +189,12 @@ fn rule_interface_findings(root: &XmlNode, defined: &BTreeSet<String>) -> Vec<Ve
 /// Vector of error findings for each missing interface reference
 fn gateway_interface_findings(root: &XmlNode, defined: &BTreeSet<String>) -> Vec<VerifyFinding> {
     let mut out = Vec::new();
-    let Some(gateways) = root.get_child("gateways") else {
-        return out;
-    };
-    for gw in &gateways.children {
+    let legacy = root.get_child("gateways").into_iter();
+    let mvc = root
+        .get_child("OPNsense")
+        .and_then(|o| o.get_child("Gateways"))
+        .into_iter();
+    for gw in legacy.chain(mvc).flat_map(|g| g.children.iter()) {
         let Some(interface) = gw.get_text(&["interface"]) else {
             continue;
         };

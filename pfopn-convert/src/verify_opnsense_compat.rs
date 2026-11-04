@@ -8,6 +8,16 @@
 //! - `rule_flag_empty`: pfSense-style empty `<disabled/>`, `<log/>`, `<not/>`,
 //!   ... in filter/NAT rules. OPNsense tests these with `!empty()`, so a
 //!   disabled rule becomes active and inverted matches flip.
+//! - `interface_flag_empty`: empty `<blockpriv/>`, `<blockbogons/>`, ... on an
+//!   interface. OPNsense reads them with `!empty()`, so "Block private/bogon
+//!   networks" is silently off.
+//! - `gateway_legacy_ignored`: gateways left in the legacy `<gateways>`
+//!   section while the Gateways model exists (OPNsense reads only the model,
+//!   so interfaces and policy routes point at gateways that do not exist).
+//! - `icmp_type_any`: a firewall rule with ICMP type `any` (pfSense's "all
+//!   types"); OPNsense writes it to pf verbatim, a syntax error.
+//! - `outbound_nat_family_mismatch`: an IPv4 outbound NAT rule with an IPv6
+//!   address (or the reverse); pf rejects the whole ruleset.
 //! - `alias_legacy_fields`: an MVC alias still using pfSense's `address`/`url`
 //!   fields instead of `content` (alias would be empty).
 //! - `kea_pool_separator`: Kea pools joined with `,` (OPNsense splits on newlines).
@@ -25,7 +35,7 @@
 
 use xml_diff_core::XmlNode;
 
-use crate::transform::rule_flags::RULE_FLAGS;
+use crate::transform::rule_flags::{INTERFACE_FLAGS, RULE_FLAGS};
 use crate::transform::version::{model_version, version_at_least};
 use crate::verify_interfaces::{FindingSeverity, VerifyFinding};
 
@@ -36,6 +46,10 @@ pub fn opnsense_compat_findings(root: &XmlNode) -> Vec<VerifyFinding> {
     }
     let mut out = Vec::new();
     rule_flag_findings(root, &mut out);
+    interface_flag_findings(root, &mut out);
+    gateway_findings(root, &mut out);
+    outbound_family_findings(root, &mut out);
+    icmp_any_findings(root, &mut out);
     pfsense_rule_feature_findings(root, &mut out);
     alias_findings(root, &mut out);
     kea_findings(root, &mut out);
@@ -80,6 +94,103 @@ fn rule_flag_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
                     ),
                 ));
             }
+        }
+    }
+}
+
+fn interface_flag_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
+    let Some(interfaces) = root.get_child("interfaces") else {
+        return;
+    };
+    for iface in &interfaces.children {
+        // `enable` is read with isset() for interfaces, so an empty one is harmless.
+        let empty: Vec<&str> = INTERFACE_FLAGS
+            .iter()
+            .copied()
+            .filter(|flag| *flag != "enable" && is_empty_leaf(iface.get_child(flag)))
+            .collect();
+        if !empty.is_empty() {
+            out.push(error(
+                "interface_flag_empty",
+                format!(
+                    "interface {} {}has empty flag(s) {}; OPNsense reads them as off",
+                    iface.tag,
+                    describe(iface),
+                    empty.join(", ")
+                ),
+            ));
+        }
+    }
+}
+
+fn gateway_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
+    if path(root, &["OPNsense", "Gateways"]).is_none() {
+        return;
+    }
+    let legacy: Vec<String> = children(root.get_child("gateways"), "gateway_item")
+        .iter()
+        .map(|g| g.get_text(&["name"]).unwrap_or("").trim().to_string())
+        .collect();
+    if !legacy.is_empty() {
+        out.push(error(
+            "gateway_legacy_ignored",
+            format!(
+                "gateway(s) {} are in the legacy <gateways> section; OPNsense only reads OPNsense/Gateways",
+                legacy.join(", ")
+            ),
+        ));
+    }
+}
+
+fn icmp_any_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
+    let rules = children(path(root, &["OPNsense", "Firewall", "Filter", "rules"]), "rule");
+    for (idx, rule) in rules.iter().enumerate() {
+        let has_any = ["icmptype", "icmp6type"].iter().any(|f| {
+            rule.get_text(&[f])
+                .map(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("any")))
+                .unwrap_or(false)
+        });
+        if has_any {
+            let descr = rule.get_text(&["description"]).map(str::trim).unwrap_or("");
+            out.push(error(
+                "icmp_type_any",
+                format!(
+                    "firewall rule #{} {}has ICMP type 'any'; pf rejects the whole ruleset (leave the field empty for all types)",
+                    idx + 1,
+                    if descr.is_empty() { String::new() } else { format!("('{descr}') ") },
+                ),
+            ));
+        }
+    }
+}
+
+fn outbound_family_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
+    let rules = children(path(root, &["OPNsense", "Firewall", "Filter", "snatrules"]), "rule");
+    for (idx, rule) in rules.iter().enumerate() {
+        let family = rule.get_text(&["ipprotocol"]).unwrap_or("inet").trim();
+        let mismatched: Vec<&str> = ["source_net", "destination_net", "target"]
+            .iter()
+            .filter_map(|f| rule.get_text(&[f]).map(str::trim))
+            .filter(|v| {
+                let addr = v.split('/').next().unwrap_or("");
+                match family {
+                    "inet" => addr.parse::<std::net::Ipv6Addr>().is_ok(),
+                    "inet6" => addr.parse::<std::net::Ipv4Addr>().is_ok(),
+                    _ => false,
+                }
+            })
+            .collect();
+        if !mismatched.is_empty() {
+            let descr = rule.get_text(&["description"]).map(str::trim).unwrap_or("");
+            out.push(error(
+                "outbound_nat_family_mismatch",
+                format!(
+                    "outbound NAT rule #{} {}is {family} but uses {}; pf rejects the whole ruleset",
+                    idx + 1,
+                    if descr.is_empty() { String::new() } else { format!("('{descr}') ") },
+                    mismatched.join(", ")
+                ),
+            ));
         }
     }
 }
@@ -324,6 +435,8 @@ mod tests {
     fn flags_each_known_regression() {
         let found = codes(
             br#"<opnsense>
+                <interfaces><wan><enable/><if>vtnet0</if><blockpriv/></wan></interfaces>
+                <gateways><gateway_item><name>GW_WAN</name></gateway_item></gateways>
                 <filter>
                   <rule><type>pass</type><disabled></disabled><source><not/></source></rule>
                   <rule><type>match</type></rule>
@@ -334,8 +447,9 @@ mod tests {
                 <OPNsense>
                   <Firewall>
                     <Alias version="1.0.1"><aliases><alias><name>a</name><address>10.0.0.1 10.0.0.2</address></alias></aliases></Alias>
-                    <Filter version="1.0.6"><onetoone/></Filter>
+                    <Filter version="1.0.6"><onetoone/><rules><rule><protocol>ICMP</protocol><icmptype>any</icmptype></rule></rules><snatrules><rule><ipprotocol>inet</ipprotocol><source_net>::1/128</source_net><description>localhost</description></rule></snatrules></Filter>
                   </Firewall>
+                  <Gateways version="1.0.0"/>
                   <IPsec><general/></IPsec>
                   <Kea><dhcp4 version="1.0.7"><subnets><subnet4><subnet>10.0.0.0/24</subnet><pools>10.0.0.10-10.0.0.20,10.0.0.30-10.0.0.40</pools></subnet4></subnets><reservations><reservation><hw_address>aa:bb:cc:dd:ee:ff</hw_address><client_id>01:aa</client_id></reservation></reservations></dhcp4></Kea>
                 </OPNsense>
@@ -343,6 +457,10 @@ mod tests {
         );
         for expected in [
             "alias_legacy_fields",
+            "gateway_legacy_ignored",
+            "interface_flag_empty",
+            "outbound_nat_family_mismatch",
+            "icmp_type_any",
             "kea_pool_separator",
             "kea_reservation_mac_and_client_id",
             "mvc_section_missing_version",

@@ -38,7 +38,7 @@ use anyhow::{bail, Context, Result};
 use xml_diff_core::{diff_with_options, parse_file, write_file, DiffOptions, XmlNode};
 
 use crate::cli::{ConvertArgs, Platform};
-use crate::conversion_summary::{
+use pfopn_convert::conversion_summary::{
     render as render_conversion_summary, summarize as summarize_conversion,
 };
 use crate::interface_guard::enforce_interface_compat;
@@ -48,9 +48,9 @@ use pfopn_convert::backend_detect::detect_dhcp_backend;
 use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
-    bridges, device_refs, dhcp, filter_mvc, ifgroups, interface_presence, interface_settings,
-    lan_ip, logical_refs, nat_mvc, opnsense_assignments, pfblocker, rule_flags, vlan_ifnames,
-    wireguard,
+    bridges, device_refs, dhcp, filter_mvc, gateways_mvc, ifgroups, interface_presence,
+    interface_settings, lan_ip, logical_refs, nat_mvc, opnsense_assignments, pfblocker,
+    rule_flags, vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -185,6 +185,34 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
             eprintln!(
                 "info: rewrote {flags} empty pfSense rule flag(s) (disabled/log/not/...) to explicit values for OPNsense"
             );
+        }
+        let (iface_flags, block_fixed) = rule_flags::normalize_interface_flags_for_opnsense(&mut out);
+        if iface_flags > 0 {
+            eprintln!(
+                "info: rewrote {iface_flags} empty pfSense interface flag(s) (enable/blockpriv/blockbogons/...) to explicit values for OPNsense"
+            );
+        }
+        if !block_fixed.is_empty() {
+            eprintln!(
+                "info: kept 'Block private/bogon networks' enabled on: {}",
+                block_fixed.join(", ")
+            );
+        }
+        let gw = gateways_mvc::move_legacy_gateways_to_mvc(&mut out, &target);
+        if gw.moved > 0 {
+            eprintln!(
+                "info: moved {} gateway(s) into the OPNsense Gateways model (replaced {} baseline gateway(s)); default: {}",
+                gw.moved,
+                gw.baseline_replaced,
+                if gw.default_gateways.is_empty() {
+                    "none".to_string()
+                } else {
+                    gw.default_gateways.join(", ")
+                }
+            );
+        }
+        for dropped in &gw.dropped_fields {
+            eprintln!("warning: {dropped}");
         }
         let nat = nat_mvc::move_legacy_nat_to_mvc(&mut out, &target);
         if nat.onetoone_moved + nat.npt_moved > 0 {

@@ -92,6 +92,9 @@ These fixes apply to every pfSense → OPNsense conversion, not only 26.7:
 | A pfSense `<ipsec>` with no tunnels replaced OPNsense's IPsec section | OPNsense IPsec settings were wiped | baseline IPsec section is kept |
 | WireGuard tunnel address was read as plain text | empty tunnel address | addresses are built as CIDRs |
 | `verify` treated `enc0` (IPsec) in NAT rules as missing, and dynamic (DHCP) gateways as incomplete | false errors/warnings | both accepted |
+| Interface flags `blockpriv`/`blockbogons` were copied as empty elements; OPNsense reads them with `!empty()` | **"Block private/bogon networks" was switched off** on interfaces where pfSense had it on | interface flags are written as `1` |
+| pfSense gateways stayed in the legacy `<gateways>` section, which OPNsense no longer reads (its own migration only runs on older models) | interfaces and policy-routing rules pointed at **gateways that did not exist**; the baseline's default gateway stayed | gateways are moved into `OPNsense/Gateways`, default gateway from `defaultgw4/6`, pfSense empty-element flags (`monitor_disable`) kept |
+| OPNsense's empty `<bridged/>` placeholder (no bridges) was given a UUID | an **invalid bridge with no interface and no members** | the placeholder is left alone |
 
 New features:
 
@@ -106,7 +109,8 @@ OPNsense 26.7 moved firewall rules, outbound NAT, 1:1 NAT and NPt into a new rul
 When the baseline is OPNsense 26.7 or newer (Filter model version 1.0.5+), `convert` writes the new format:
 
 - **Firewall rules** go to `OPNsense/Firewall/Filter/rules`, using the same field mapping as OPNsense's Firewall → Migration assistant. Rule order follows OPNsense's legacy ordering: floating rules first, then WAN, LAN, then other interfaces in natural order. Sequence numbers are 1, 11, 21, …
-- **Outbound NAT** goes to `OPNsense/Firewall/Filter/snatrules`. pfSense's `<if>ip` target becomes OPNsense's "interface address"; `target`/`target_subnet` and `source_hash_key` are mapped. The outbound NAT mode is kept.
+- **Outbound NAT** goes to `OPNsense/Firewall/Filter/snatrules`. pfSense's `<if>ip` target becomes OPNsense's "interface address"; `target`/`target_subnet` and `source_hash_key` are mapped. The outbound NAT mode is kept. pfSense outbound rules carry no address family; it is taken from the addresses (pfSense's auto-created `::1/128` localhost rules become IPv6), because OPNsense only accepts IPv4 or IPv6 and a mismatch stops the whole ruleset from loading.
+- **ICMP type `any`** (pfSense's "all types") is written as an empty ICMP type, which is how OPNsense expresses it; `any` itself is a pf syntax error.
 - **1:1 NAT and NPt** go to `OPNsense/Firewall/Filter/onetoone` and `npt`. A 1:1 rule whose external address is not a fixed IP (for example pfSense's `wanip`) cannot be expressed in OPNsense and is skipped with a warning.
 - **Default rules are replaced.** A fresh 26.7 install ships "Default allow LAN to any" rules in the new format. They are replaced by the converted ruleset, so the result matches the source exactly (pfSense configs carry their own LAN rules).
 - **Port-forward links are cleared.** OPNsense 26.7 drops a port forward's link to its filter rule (`associated-rule-id`) on load, except for "pass". The converter does the same; the filter rule itself stays as an ordinary rule.
@@ -269,6 +273,10 @@ pfopn-convert verify <FILE> [--to <pfsense|opnsense>] [--target-version <VERSION
   - `kea_reservation_mac_and_client_id` (error): a Kea reservation with both a MAC and a client ID
   - `nat_legacy_ignored` (error): 1:1 NAT/NPt left in the old `<nat>` section on OPNsense 26.7+, where they are ignored
   - `staticroute_disabled_ignored` (error): a disabled route using `<disabled>` where the route model reads `<enabled>`
+  - `interface_flag_empty` (error): empty `blockpriv`/`blockbogons` (and DHCPv6 flags) on an interface, which OPNsense reads as off
+  - `gateway_legacy_ignored` (error): gateways in the legacy `<gateways>` section while the Gateways model exists
+  - `outbound_nat_family_mismatch` (error): an IPv4 outbound NAT rule with an IPv6 address or the reverse; pf rejects the whole ruleset
+  - `icmp_type_any` (error): ICMP type `any` on a rule; pf rejects the whole ruleset
   - `mvc_section_missing_version` (warning): an OPNsense section without a `version` attribute, so OPNsense re-runs all of its migrations
   - `pfsense_match_rule`, `pfsense_nat64_rule` (warning): pfSense-only rule types
 - dynamic (DHCP) gateways with an empty or `dynamic` gateway address are accepted
@@ -325,7 +333,7 @@ Source and target versions this fork was developed against:
 - pfSense CE 2.8.1 (config version 24.0) and 2.9.0 (config version 24.6)
 - OPNsense 26.1 and 26.7 baselines (checked against OPNsense 26.7.8 source)
 
-Conversions have been checked with `verify` against real configs, but not yet restored on real OPNsense 26.7 hardware. Test in a VM first.
+Conversions have been checked with `verify` against real configs, and a pfSense 2.9.0 config has been restored onto an OPNsense 26.7.8 VM (ruleset, gateways, interfaces and virtual IPs load cleanly). Test in a VM first.
 
 ### Known limitations
 

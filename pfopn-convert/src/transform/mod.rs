@@ -4,6 +4,7 @@ pub mod certs;
 pub mod device_refs;
 pub mod dhcp;
 pub mod filter_mvc;
+pub mod gateways_mvc;
 pub mod ifgroups;
 pub mod interface_presence;
 pub mod interface_settings;

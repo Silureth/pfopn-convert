@@ -6,6 +6,10 @@ use xml_diff_core::XmlNode;
 /// pfSense configs don't include these, so when converting pf -> opn we
 /// generate a deterministic UUID from the bridge's member list (or interface
 /// name as fallback). Already-present UUIDs are left untouched.
+///
+/// The empty `<bridged/>` placeholder OPNsense writes when there are no bridges
+/// is left alone: giving it a UUID would turn it into a bridge with no
+/// interface and no members, which the Bridge model rejects.
 pub fn normalize_for_opnsense(root: &mut XmlNode) {
     let Some(bridges) = child_mut(root, "bridges") else {
         return;
@@ -13,7 +17,7 @@ pub fn normalize_for_opnsense(root: &mut XmlNode) {
     for (idx, bridged) in bridges
         .children
         .iter_mut()
-        .filter(|c| c.tag == "bridged")
+        .filter(|c| c.tag == "bridged" && !is_empty_placeholder(c))
         .enumerate()
     {
         if !bridged.attributes.contains_key("uuid") {
@@ -29,6 +33,14 @@ pub fn normalize_for_opnsense(root: &mut XmlNode) {
                 .insert("uuid".to_string(), stable_uuid(seed.as_bytes(), idx));
         }
     }
+}
+
+/// True for the bare `<bridged/>` element OPNsense's Bridge model writes when
+/// no bridges are configured (no fields, no `uuid`). It is not a bridge.
+pub fn is_empty_placeholder(bridged: &XmlNode) -> bool {
+    bridged.children.is_empty()
+        && bridged.attributes.is_empty()
+        && bridged.text.as_deref().map(str::trim).unwrap_or("").is_empty()
 }
 
 /// Normalizes bridge configuration for pfSense format.
@@ -112,6 +124,20 @@ mod tests {
             .and_then(|b| b.children.iter().find(|c| c.tag == "bridged"))
             .expect("bridged");
         assert!(bridged.attributes.contains_key("uuid"));
+    }
+
+    #[test]
+    fn leaves_empty_opnsense_placeholder_alone() {
+        let mut root = parse(
+            br#"<opnsense><bridges version="1.0.0"><bridged/></bridges></opnsense>"#,
+        )
+        .expect("parse");
+        normalize_for_opnsense(&mut root);
+        let bridged = root
+            .get_child("bridges")
+            .and_then(|b| b.children.iter().find(|c| c.tag == "bridged"))
+            .expect("bridged");
+        assert!(bridged.attributes.is_empty());
     }
 
     #[test]

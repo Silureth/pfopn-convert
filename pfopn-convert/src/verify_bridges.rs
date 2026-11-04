@@ -17,6 +17,7 @@
 
 use xml_diff_core::XmlNode;
 
+use crate::transform::bridges::is_empty_placeholder;
 use crate::verify_interfaces::{collect_defined_interface_names, FindingSeverity, VerifyFinding};
 
 /// Find all bridge configuration problems.
@@ -46,7 +47,7 @@ pub fn bridge_findings(root: &XmlNode) -> Vec<VerifyFinding> {
     for (idx, bridged) in bridges
         .children
         .iter()
-        .filter(|c| c.tag == "bridged")
+        .filter(|c| c.tag == "bridged" && !is_empty_placeholder(c))
         .enumerate()
     {
         let members = bridged
@@ -136,11 +137,23 @@ mod tests {
 
     #[test]
     fn detects_empty_bridge_members() {
+        for xml in [
+            &br#"<pfsense><interfaces><lan/></interfaces><bridges><bridged><members></members><bridgeif></bridgeif></bridged></bridges></pfsense>"#[..],
+            // A UUID turns OPNsense's placeholder into a (broken) bridge entry.
+            &br#"<opnsense><interfaces><lan/></interfaces><bridges><bridged uuid="62e5a726-7ab1-4607-8809-0a0b0c0d0e0f"/></bridges></opnsense>"#[..],
+        ] {
+            let root = parse(xml).expect("parse");
+            let findings = bridge_findings(&root);
+            assert!(findings.iter().any(|f| f.code == "empty_bridge_members"));
+        }
+    }
+
+    #[test]
+    fn ignores_opnsense_empty_placeholder() {
         let root = parse(
-            br#"<pfsense><interfaces><lan/></interfaces><bridges><bridged/></bridges></pfsense>"#,
+            br#"<opnsense><interfaces><lan/></interfaces><bridges version="1.0.0"><bridged/></bridges></opnsense>"#,
         )
         .expect("parse");
-        let findings = bridge_findings(&root);
-        assert!(findings.iter().any(|f| f.code == "empty_bridge_members"));
+        assert!(bridge_findings(&root).is_empty());
     }
 }

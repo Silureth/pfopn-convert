@@ -212,7 +212,7 @@ fn bridge_findings(root: &XmlNode, profile: &ExpectedProfile) -> Vec<VerifyFindi
     for (idx, bridge) in bridges
         .children
         .iter()
-        .filter(|c| c.tag == "bridged")
+        .filter(|c| c.tag == "bridged" && !crate::transform::bridges::is_empty_placeholder(c))
         .enumerate()
     {
         let members = bridge

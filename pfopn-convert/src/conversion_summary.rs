@@ -42,7 +42,14 @@ fn count_interfaces(root: &XmlNode) -> usize {
 
 fn count_bridges(root: &XmlNode) -> usize {
     root.get_child("bridges")
-        .map(|n| n.children.iter().filter(|c| c.tag == "bridged").count())
+        .map(|n| {
+            n.children
+                .iter()
+                .filter(|c| {
+                    c.tag == "bridged" && !crate::transform::bridges::is_empty_placeholder(c)
+                })
+                .count()
+        })
         .unwrap_or(0)
 }
 

@@ -21,7 +21,6 @@ use pfopn_convert::sections_report::{
 use xml_diff_core::{diff_with_options, parse_file, write_file, DiffEntry, DiffOptions};
 
 mod cli;
-mod conversion_summary;
 mod convert;
 mod interface_guard;
 mod migrate_check_cmd;

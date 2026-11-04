@@ -342,8 +342,11 @@ fn map_filter_rule(
         .unwrap_or_else(|| "any".to_string());
     push(&mut node, "protocol", &protocol);
 
-    let icmp = text(rule, "icmptype");
-    let icmp6_legacy = text(rule, "icmp6-type");
+    // pfSense stores "all ICMP types" as `any`; OPNsense passes the field to pf
+    // verbatim (`icmp-type {any}`), which is a syntax error that stops the whole
+    // ruleset from loading. OPNsense's "any" is an empty field.
+    let icmp = icmp_types_or_any(&text(rule, "icmptype"));
+    let icmp6_legacy = icmp_types_or_any(&text(rule, "icmp6-type"));
     if ipprotocol == "inet6" && !icmp.is_empty() {
         // pfSense keeps ICMPv6 types in <icmptype>; the MVC model has a
         // separate numeric icmp6type field.
@@ -423,6 +426,18 @@ fn address_fields(block: Option<&XmlNode>) -> (String, bool, String) {
         .replace("-any", "-65535")
         .replace("any-", "1-");
     (net, not, port)
+}
+
+/// Empty when the ICMP type list includes pfSense's `any` (all types).
+fn icmp_types_or_any(types: &str) -> String {
+    if types
+        .split(',')
+        .any(|t| t.trim().eq_ignore_ascii_case("any"))
+    {
+        String::new()
+    } else {
+        types.to_string()
+    }
 }
 
 fn icmp6_numbers(names: &str, label: &str, stats: &mut FilterMvcStats) -> String {
@@ -532,11 +547,16 @@ fn map_outbound_rule(
     push(&mut node, "nosync", bool01(pf_flag_is_set(rule, "nosync")));
     push(&mut node, "sequence", &sequence.to_string());
     push(&mut node, "interface", &interface);
-    push(
-        &mut node,
-        "ipprotocol",
-        &non_empty(text(rule, "ipprotocol")).unwrap_or_else(|| "inet".to_string()),
+    let source_net = outbound_network(source);
+    let destination_net = outbound_network(destination);
+    let target = outbound_target(rule, &interface);
+    let ipprotocol = outbound_ipprotocol(
+        rule,
+        [&source_net, &destination_net, &target],
+        label,
+        stats,
     );
+    push(&mut node, "ipprotocol", ipprotocol);
     push(
         &mut node,
         "protocol",
@@ -544,7 +564,7 @@ fn map_outbound_rule(
             .map(|p| p.to_ascii_uppercase())
             .unwrap_or_else(|| "any".to_string()),
     );
-    push(&mut node, "source_net", &outbound_network(source));
+    push(&mut node, "source_net", &source_net);
     push(
         &mut node,
         "source_not",
@@ -555,7 +575,7 @@ fn map_outbound_rule(
         "source_port",
         &normalize_port(&text(rule, "sourceport")),
     );
-    push(&mut node, "destination_net", &outbound_network(destination));
+    push(&mut node, "destination_net", &destination_net);
     push(
         &mut node,
         "destination_not",
@@ -570,7 +590,7 @@ fn map_outbound_rule(
         "destination_port",
         &normalize_port(&text(rule, "dstport")),
     );
-    push(&mut node, "target", &outbound_target(rule, &interface));
+    push(&mut node, "target", &target);
     push(
         &mut node,
         "target_port",
@@ -600,6 +620,44 @@ fn map_outbound_rule(
     push(&mut node, "tagged", &text(rule, "tagged"));
     push(&mut node, "description", &text(rule, "descr"));
     node
+}
+
+/// Address family for an outbound NAT rule. OPNsense's `snatrules` only accept
+/// `inet` or `inet6`. pfSense outbound rules usually carry no `<ipprotocol>`
+/// (pf infers the family from the addresses), and its auto-created rules
+/// include an IPv6 localhost (`::1/128`) entry. Writing those as `inet` makes
+/// pf reject the whole ruleset ("rule expands to no valid combination"), so
+/// when the family is missing (or `inet46`) it is taken from the addresses:
+/// any literal IPv6 address/network means `inet6`, otherwise `inet`.
+fn outbound_ipprotocol(
+    rule: &XmlNode,
+    addresses: [&str; 3],
+    label: &str,
+    stats: &mut FilterMvcStats,
+) -> &'static str {
+    let explicit = text(rule, "ipprotocol");
+    match explicit.as_str() {
+        "inet" => return "inet",
+        "inet6" => return "inet6",
+        _ => {}
+    }
+    let inferred = if addresses.iter().any(|a| is_ipv6_literal(a)) {
+        "inet6"
+    } else {
+        "inet"
+    };
+    if !explicit.is_empty() {
+        stats.dropped_fields.push(format!(
+            "{label}: IP version '{explicit}' not supported for outbound NAT, using {inferred}"
+        ));
+    }
+    inferred
+}
+
+/// True for an IPv6 address or network (`::1`, `2001:db8::/32`).
+fn is_ipv6_literal(value: &str) -> bool {
+    let addr = value.split('/').next().unwrap_or("");
+    addr.parse::<std::net::Ipv6Addr>().is_ok()
 }
 
 fn outbound_network(block: Option<&XmlNode>) -> String {
@@ -739,7 +797,7 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// Deterministic, RFC 4122-shaped UUID from a seed string.
-fn stable_uuid(seed: &str) -> String {
+pub(crate) fn stable_uuid(seed: &str) -> String {
     let fnv = |offset: u64| {
         seed.bytes().fold(offset, |h, b| {
             (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
@@ -924,6 +982,26 @@ mod tests {
     }
 
     #[test]
+    fn maps_icmp_type_any_to_empty() {
+        let baseline = parse(BASELINE_26_7).expect("parse");
+        let mut out = parse(
+            br#"<opnsense><filter>
+                <rule><type>pass</type><interface>opt2</interface><ipprotocol>inet</ipprotocol><protocol>icmp</protocol><icmptype>any</icmptype><source><network>opt2</network></source><destination><network>opt4</network></destination><descr>ping</descr></rule>
+                <rule><type>pass</type><interface>opt2</interface><ipprotocol>inet</ipprotocol><protocol>icmp</protocol><icmptype>unreach</icmptype><source><any/></source><destination><any/></destination></rule>
+                <rule><type>pass</type><interface>opt2</interface><ipprotocol>inet6</ipprotocol><protocol>icmp</protocol><icmptype>any</icmptype><source><any/></source><destination><any/></destination></rule>
+            </filter></opnsense>"#,
+        )
+        .expect("parse");
+
+        let stats = move_legacy_rules_to_mvc(&mut out, &baseline);
+        let rules = mvc_rules(&out, "rules");
+        assert_eq!(rules[0].get_text(&["icmptype"]).unwrap_or(""), "");
+        assert_eq!(rules[1].get_text(&["icmptype"]), Some("unreach"));
+        assert!(rules[2].get_text(&["icmp6type"]).unwrap_or("").is_empty());
+        assert!(!stats.dropped_fields.iter().any(|d| d.contains("any")));
+    }
+
+    #[test]
     fn converts_pfsense_outbound_nat() {
         let baseline = parse(BASELINE_26_7).expect("parse");
         let mut out = parse(
@@ -958,6 +1036,29 @@ mod tests {
             rules[2].get_text(&["poolopts_sourcehashkey"]),
             Some("0xabc")
         );
+    }
+
+    #[test]
+    fn infers_outbound_nat_address_family() {
+        let baseline = parse(BASELINE_26_7).expect("parse");
+        let mut out = parse(
+            br#"<opnsense><nat><outbound><mode>hybrid</mode>
+                <rule><interface>wan</interface><source><network>127.0.0.0/8</network></source><destination><any/></destination><target>wanip</target><descr>Auto created rule - localhost to WAN</descr></rule>
+                <rule><interface>wan</interface><source><network>::1/128</network></source><destination><any/></destination><target>wanip</target><descr>Auto created rule - localhost to WAN</descr></rule>
+                <rule><interface>wan</interface><source><network>lan_hosts</network></source><destination><network>2001:db8::/32</network></destination></rule>
+                <rule><interface>wan</interface><ipprotocol>inet6</ipprotocol><source><network>lan_v6</network></source><destination><any/></destination></rule>
+                <rule><interface>wan</interface><ipprotocol>inet46</ipprotocol><source><network>10.0.0.0/8</network></source><destination><any/></destination></rule>
+            </outbound></nat></opnsense>"#,
+        )
+        .expect("parse");
+
+        let stats = move_legacy_rules_to_mvc(&mut out, &baseline);
+        let families: Vec<_> = mvc_rules(&out, "snatrules")
+            .iter()
+            .map(|r| r.get_text(&["ipprotocol"]).unwrap_or("").to_string())
+            .collect();
+        assert_eq!(families, ["inet", "inet6", "inet6", "inet6", "inet"]);
+        assert!(stats.dropped_fields.iter().any(|d| d.contains("inet46")));
     }
 
     #[test]

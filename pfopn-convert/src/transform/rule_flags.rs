@@ -25,6 +25,25 @@ pub(crate) const RULE_FLAGS: &[&str] = &[
     "pass",
 ];
 
+/// Interface flags pfSense writes as empty elements when set.
+///
+/// OPNsense reads `blockpriv`/`blockbogons` with `!empty()` when generating the
+/// block rules (`filter.lib.inc`), so an empty element silently turns "Block
+/// private networks" / "Block bogon networks" off on that interface. The DHCPv6
+/// flags are read with a mix of `isset()` and `!empty()`. `enable` is read with
+/// `isset()`, but is written as `1` too so the result matches what OPNsense
+/// itself writes.
+pub(crate) const INTERFACE_FLAGS: &[&str] = &[
+    "enable",
+    "blockpriv",
+    "blockbogons",
+    "dhcp6prefixonly",
+    "dhcp6-ia-pd-send-hint",
+    "adv_dhcp6_interface_statement_information_only_enable",
+    "adv_dhcp6_id_assoc_statement_address_enable",
+    "adv_dhcp6_id_assoc_statement_prefix_enable",
+];
+
 /// Address blocks inside a rule that may carry a `<not>` flag.
 const ADDRESS_BLOCKS: &[&str] = &["source", "destination"];
 
@@ -46,6 +65,37 @@ pub fn normalize_empty_flags_for_opnsense(root: &mut XmlNode) -> usize {
         }
     }
     changed
+}
+
+/// Rewrite present-but-empty pfSense interface flags (`blockpriv`,
+/// `blockbogons`, `enable`, ...) to `1` so OPNsense reads them as set.
+///
+/// Returns `(flags rewritten, interfaces that had block-private/bogon flags
+/// rewritten)`; the latter are the ones whose protection would have been lost.
+pub fn normalize_interface_flags_for_opnsense(root: &mut XmlNode) -> (usize, Vec<String>) {
+    let mut changed = 0;
+    let mut block_fixed = Vec::new();
+    let Some(interfaces) = child_mut(root, "interfaces") else {
+        return (0, block_fixed);
+    };
+    for iface in interfaces.children.iter_mut() {
+        let had_empty_block = ["blockpriv", "blockbogons"].iter().any(|tag| {
+            iface
+                .get_child(tag)
+                .map(|c| c.children.is_empty() && c.text.as_deref().map(str::trim).unwrap_or("").is_empty())
+                .unwrap_or(false)
+        });
+        changed += set_empty_flags(iface, INTERFACE_FLAGS);
+        if had_empty_block {
+            let descr = iface.get_text(&["descr"]).map(str::trim).unwrap_or("");
+            block_fixed.push(if descr.is_empty() {
+                iface.tag.clone()
+            } else {
+                format!("{} ({descr})", iface.tag)
+            });
+        }
+    }
+    (changed, block_fixed)
 }
 
 fn normalize_rules(container: &mut XmlNode, rule_tag: &str) -> usize {
@@ -100,7 +150,34 @@ fn child_mut<'a>(parent: &'a mut XmlNode, tag: &str) -> Option<&'a mut XmlNode> 
 mod tests {
     use xml_diff_core::parse;
 
-    use super::normalize_empty_flags_for_opnsense;
+    use super::{normalize_empty_flags_for_opnsense, normalize_interface_flags_for_opnsense};
+
+    #[test]
+    fn rewrites_empty_interface_flags() {
+        let mut root = parse(
+            br#"<opnsense><interfaces>
+                <wan><enable></enable><if>vtnet0</if><blockpriv/><blockbogons></blockbogons><ipaddrv6></ipaddrv6><spoofmac/></wan>
+                <opt1><descr>DMZ</descr><if>vtnet2</if><blockpriv/></opt1>
+                <lan><enable>1</enable><if>vtnet1</if></lan>
+            </interfaces></opnsense>"#,
+        )
+        .expect("parse");
+
+        let (changed, block_fixed) = normalize_interface_flags_for_opnsense(&mut root);
+        assert_eq!(changed, 4);
+        assert_eq!(block_fixed, vec!["wan".to_string(), "opt1 (DMZ)".to_string()]);
+
+        let ifaces = root.get_child("interfaces").unwrap();
+        assert_eq!(ifaces.get_text(&["wan", "enable"]), Some("1"));
+        assert_eq!(ifaces.get_text(&["wan", "blockpriv"]), Some("1"));
+        assert_eq!(ifaces.get_text(&["wan", "blockbogons"]), Some("1"));
+        // Non-flag empty values keep their meaning ("none").
+        assert_eq!(ifaces.get_text(&["wan", "ipaddrv6"]).unwrap_or(""), "");
+        assert_eq!(ifaces.get_text(&["wan", "spoofmac"]).unwrap_or(""), "");
+        // A disabled interface (no <enable>) stays disabled.
+        assert!(ifaces.get_child("opt1").unwrap().get_child("enable").is_none());
+        assert_eq!(ifaces.get_text(&["opt1", "blockpriv"]), Some("1"));
+    }
 
     #[test]
     fn rewrites_empty_flags_in_filter_and_nat_rules() {
