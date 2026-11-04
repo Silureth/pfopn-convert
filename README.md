@@ -5,7 +5,7 @@
 
 CLI for migrating firewall configs between pfSense and OPNsense, with section-aware diff analysis and pre-restore validation.
 
-> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) focused on **pfSense CE 2.8 / 2.9 → OPNsense 26.7**. It fixes several conversion bugs that changed firewall behaviour silently, and adds support for OPNsense 26.7's new rule format. See [Changes in this fork](#changes-in-this-fork) and [OPNsense 26.7 targets](#opnsense-267-targets).
+> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) focused on **pfSense CE 2.8 / 2.9 → OPNsense 26.7**. It fixes several conversion bugs that changed firewall behaviour silently, adds support for OPNsense 26.7's new rule format, and converts the DNS Resolver, remote syslog and common plugins. It has been used for a real pfSense 2.9.0 → OPNsense 26.7.8 cutover; see [Tested migration](#tested-migration), [Changes in this fork](#changes-in-this-fork) and [OPNsense 26.7 targets](#opnsense-267-targets).
 
 > WARNING: This tool can break network connectivity or lock you out if used incorrectly. It is intended for restore/migration onto fresh destination installs. Do not restore to production systems unless you fully understand the generated changes and have rollback access.
 
@@ -31,6 +31,18 @@ Then:
 1. run `convert` with `--target-file <target-baseline.xml>` to generate a new output XML.
 2. run `verify` and `migrate-check` on that output.
 3. restore/import the generated output on the destination firewall.
+
+The order that worked for a real cutover (pfSense → OPNsense, both as VMs):
+
+1. Install OPNsense in the **exact version** you will run, and update it fully.
+2. Give it one network port per source interface, **in the same order**, and assign them all (`wan`, `lan`, `opt1`, … including interfaces that are disabled on the source). Skip the setup wizard.
+3. Install the OPNsense plugins the source needs (see [Plugins](#plugins)), without configuring them.
+4. Export this config as the baseline and take a VM snapshot.
+5. `convert`, then `verify --strict`. Read every `warning:` line and the `plugins:` report.
+6. Restore the output on the destination **while only an isolated network is connected**: the output carries the source's IP addresses. Disconnect (or move) every other port first.
+7. After the reboot, check the ruleset from the shell: `pfctl -nf /tmp/rules.debug`. A single invalid line stops pf from loading the whole ruleset, and the GUI only shows the first error.
+8. Check the GUI (rules, NAT, gateways, services). If something is wrong, roll back to the snapshot, fix, convert again.
+9. Cut over: shut the source down, move the destination's ports to the real networks. Optionally copy the source's WAN MAC addresses so upstream ARP caches keep working; then never run both at once.
 
 ## Quick Start (Do This)
 
@@ -76,6 +88,33 @@ Read the `info:` and `warning:` lines that `convert` prints. They list everythin
 - Assign **every** physical port the source uses, including interfaces that are disabled on the source. For example, a pfSense box with WAN, LAN and OPT1–OPT4 needs six assigned ports on the destination, even if OPT3 is disabled.
 - Export the baseline from the **same OPNsense version** you will restore onto. Several conversions depend on the model versions in the baseline (see [OPNsense 26.7 targets](#opnsense-267-targets)).
 
+## Tested migration
+
+This fork was used to migrate a production pfSense firewall to OPNsense. Every problem found on the way was fixed in the converter and got a `verify` check (see [Changes in this fork](#changes-in-this-fork)).
+
+**Source:** pfSense CE 2.9.0 (config version 24.6), Proxmox VM, 6 virtio interfaces (3 WANs, one of them disabled, and 3 internal networks; VLANs tagged on the hypervisor).
+The config had about 100 firewall rules (floating rules, policy routing over two gateways), hybrid outbound NAT with 43 rules, 58 port forwards, 44 aliases, 13 IP-alias virtual IPs, 4 gateways, DNS Resolver host and domain overrides, remote syslog, and the packages Zabbix Agent 7, node_exporter, Shellcmd and pfBlockerNG-devel.
+
+**Destination:** OPNsense 26.7.8 (installed as 25.7, upgraded through 26.1), Proxmox VM (x86-64-v2-AES, 4 vCPU, 4 GB RAM, virtio NICs), plugins `os-zabbix7-agent`, `os-node_exporter` and `os-qemu-guest-agent` installed before the baseline export.
+
+Verified on the destination after the restore and the cutover:
+
+| Area | Result |
+|---|---|
+| Firewall ruleset | loads (`pfctl -nf` clean); rules and outbound NAT are in the 26.7 rule model |
+| Interfaces, virtual IPs | all addresses up; disabled interface stays disabled; "Block private/bogon networks" kept |
+| Gateways | all 4 present with the correct default gateway; the gateways of the enabled interfaces answer |
+| Port forwards | forwarded services (monitoring stack) are reachable through the firewall |
+| DNS Resolver | host override answers; recursive resolution works |
+| Remote syslog, node_exporter | logs and metrics reach the monitoring stack |
+| Zabbix agent | reachable from the Zabbix server with PSK encryption |
+| QEMU guest agent | enabled |
+| Web GUI certificate | the pfSense certificate is kept (same fingerprint) |
+
+Converted and visible in the GUI, but not tested separately: policy routing and outbound NAT for client traffic, DNS Resolver query forwarding (domain override), DNSSEC and hardening options.
+
+Not exercised by this migration (the source had none configured): OpenVPN, IPsec, WireGuard, DHCP (ISC/Kea), static routes, bridges, the OPNsense → pfSense direction. Those conversions are covered by unit tests and `verify` only.
+
 ## Changes in this fork
 
 These fixes apply to every pfSense → OPNsense conversion, not only 26.7:
@@ -95,6 +134,8 @@ These fixes apply to every pfSense → OPNsense conversion, not only 26.7:
 | Interface flags `blockpriv`/`blockbogons` were copied as empty elements; OPNsense reads them with `!empty()` | **"Block private/bogon networks" was switched off** on interfaces where pfSense had it on | interface flags are written as `1` |
 | pfSense gateways stayed in the legacy `<gateways>` section, which OPNsense no longer reads (its own migration only runs on older models) | interfaces and policy-routing rules pointed at **gateways that did not exist**; the baseline's default gateway stayed | gateways are moved into `OPNsense/Gateways`, default gateway from `defaultgw4/6`, pfSense empty-element flags (`monitor_disable`) kept |
 | OPNsense's empty `<bridged/>` placeholder (no bridges) was given a UUID | an **invalid bridge with no interface and no members** | the placeholder is left alone |
+| The web GUI certificate was only carried over when a VPN used it | OPNsense **generated a new self-signed certificate** at boot | the referenced certificate (and its CA) is copied; otherwise the baseline's is kept |
+| The merged `system` section (from pfSense) dropped OPNsense's `system/firmware` | update settings and the configured-plugin list were lost | the baseline's `system/firmware` is kept and the needed plugins are added to it |
 
 New features:
 
@@ -142,6 +183,9 @@ The DNS Resolver and remote syslog conversions follow OPNsense's own legacy migr
 
 - Take a full config backup of the destination firewall before any restore.
 - If testing in VM/lab, take a VM snapshot before first import.
+- Install the plugins the source needs **before** exporting the baseline, or their settings are not converted (the `plugins:` report shows `NOT INSTALLED`).
+- The output contains the source's IP addresses: restore it with only an isolated network connected.
+- After the reboot, run `pfctl -nf /tmp/rules.debug` in the shell. It lists every ruleset error, not just the first one the GUI shows.
 - If restore reports interface assignment warnings, reboot the destination and restore the same generated XML a second time.
 - This appears to be an intermittent OPNsense interface/apply behavior.
 
@@ -353,7 +397,7 @@ Source and target versions this fork was developed against:
 - pfSense CE 2.8.1 (config version 24.0) and 2.9.0 (config version 24.6)
 - OPNsense 26.1 and 26.7 baselines (checked against OPNsense 26.7.8 source)
 
-Conversions have been checked with `verify` against real configs, and a pfSense 2.9.0 config has been restored onto an OPNsense 26.7.8 VM (ruleset, gateways, interfaces and virtual IPs load cleanly). Test in a VM first.
+A pfSense 2.9.0 config was converted, restored and taken into production on OPNsense 26.7.8; see [Tested migration](#tested-migration) for what was verified. Test in a VM first.
 
 ### Known limitations
 
@@ -365,6 +409,10 @@ Conversions have been checked with `verify` against real configs, and a pfSense 
 - **Port forwards** lose their link to the filter rule on 26.7 (the rule stays).
 - **IPsec phase 2** uses OPNsense's default ESP proposals; pfSense's per-tunnel encryption settings are not mapped.
 - **Kea client IDs** from pfSense static mappings are not transferred.
+- **pfSense-only `system` settings** (for example `earlyshellcmd`, `pkg_repo_conf_path`) are carried over; OPNsense ignores them. Time server names are kept as they are (for example `0.pfsense.pool.ntp.org`).
+- **DNS Resolver:** custom options, the Python module (pfBlockerNG DNSBL) and the DNS over TLS service for clients are not converted (warnings are printed).
+- **Remote syslog:** pfSense's per-category selection becomes "all programs" (a warning is printed); the source address is not converted.
+- **Shellcmd** commands other than starting the QEMU guest agent are not converted; use `/usr/local/etc/rc.syshook.d/` scripts.
 
 ## Sharing configs safely
 
