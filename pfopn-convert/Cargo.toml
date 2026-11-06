@@ -1,9 +1,10 @@
 [package]
 name = "pfopn-convert"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Compare and convert pfSense and OPNsense firewall XML configurations"
 license = "BSD-2-Clause"
+repository = "https://github.com/Silureth/pfopn-convert"
 
 [dependencies]
 xml-diff-core = { path = "../xml-diff-core" }

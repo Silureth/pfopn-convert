@@ -105,11 +105,27 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Extract release notes
+        run: |
+          # The CHANGELOG.md section for this tag, from its "## <tag>" heading
+          # up to the next "## " heading.
+          awk -v tag="${GITHUB_REF_NAME}" '
+            /^## / { if (found) exit; if (index($0, "## " tag " ") == 1 || $0 == "## " tag) found = 1; next }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG.md section for ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
 
       - name: Generate checksums
         run: |
@@ -119,6 +135,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             artifacts/*
         env:

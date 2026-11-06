@@ -1,7 +1,7 @@
 # pfopn-convert
 
-![CI](https://github.com/sheridans/pfopn-convert/actions/workflows/ci.yml/badge.svg)
-![Release](https://img.shields.io/github/v/release/sheridans/pfopn-convert?display_name=tag)
+![CI](https://github.com/Silureth/pfopn-convert/actions/workflows/ci.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/Silureth/pfopn-convert?display_name=tag)
 
 CLI for migrating firewall configs between pfSense and OPNsense, with section-aware diff analysis and pre-restore validation.
 
@@ -11,7 +11,9 @@ CLI for migrating firewall configs between pfSense and OPNsense, with section-aw
 
 ## Build
 
-Requires a Rust toolchain (for example via [rustup](https://rustup.rs)).
+Prebuilt binaries for Linux (x86_64, aarch64), FreeBSD, macOS and Windows are on the [Releases](https://github.com/Silureth/pfopn-convert/releases) page, with a `SHA256SUMS` file. Changes per version are in [CHANGELOG.md](CHANGELOG.md).
+
+To build from source, you need a Rust toolchain (for example via [rustup](https://rustup.rs)).
 
 ```bash
 cargo build --release

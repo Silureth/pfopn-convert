@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
-#[command(name = "pfopn-convert")]
+#[command(name = "pfopn-convert", version)]
 #[command(about = "Compare and inspect firewall XML configurations")]
 pub struct Cli {
     #[command(subcommand)]
