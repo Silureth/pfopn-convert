@@ -286,6 +286,31 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                 eprintln!("warning: {warning}");
             }
             plugin_report = Some(opn_plugins::from_pfsense(&mut out, &input, &target));
+            let feeds =
+                pfblocker::rewrite_feed_aliases_for_opnsense(&mut out, &input, args.pfblocker_feeds);
+            for (name, count) in &feeds.rewritten {
+                eprintln!("info: pointed pfBlockerNG alias {name} at {count} feed URL(s)");
+            }
+            for warning in &feeds.warnings {
+                eprintln!("warning: {warning}");
+            }
+            if !feeds.disabled.is_empty() {
+                eprintln!(
+                    "warning: disabled pfBlockerNG alias(es) without a usable feed: {} (rules using them match nothing)",
+                    feeds.disabled.join(", ")
+                );
+            }
+            if !feeds.left_local.is_empty() {
+                eprintln!(
+                    "warning: pfBlockerNG alias(es) {} download from pfBlockerNG on the pfSense box, so they stay empty on OPNsense and rules using them match nothing{}",
+                    feeds.left_local.join(", "),
+                    if args.pfblocker_feeds {
+                        ""
+                    } else {
+                        "; use --pfblocker-feeds to point them at the original feed URLs"
+                    }
+                );
+            }
         }
         vlan_ifnames::normalize_opnsense_vlan_ifnames(&mut out);
         wireguard::normalize_opnsense_interface_names(&mut out);

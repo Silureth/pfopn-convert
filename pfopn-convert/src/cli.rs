@@ -242,6 +242,12 @@ pub struct ConvertArgs {
     /// converting them to the new rule model.
     #[arg(long)]
     pub legacy_rules: bool,
+    /// Point pfBlockerNG IP aliases (pfB_*_v4/_v6) at their original feed URLs
+    /// instead of pfBlockerNG's local endpoint, which does not exist on OPNsense.
+    /// Dead feeds are skipped. Off by default: once the aliases fill, the
+    /// pfBlockerNG block/reject rules that use them take effect.
+    #[arg(long)]
+    pub pfblocker_feeds: bool,
     /// DHCP backend policy for target conversion.
     #[arg(long, value_enum, default_value_t = DhcpBackend::Auto)]
     pub backend: DhcpBackend,

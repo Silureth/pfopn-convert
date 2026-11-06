@@ -76,6 +76,7 @@ Optional flags for initial migration:
 - `--lan-ip <IPv4>` only if you want to change the LAN IP/subnet in the output.
 - `--disable-dhcp` only if you want DHCP services off in the generated output.
 - `--legacy-rules` only if you want to keep firewall/outbound NAT rules in the old format on an OPNsense 26.7+ target (see [OPNsense 26.7 targets](#opnsense-267-targets)).
+- `--pfblocker-feeds` if you used pfBlockerNG IP lists and want them to keep blocking (see [Known limitations](#known-limitations)).
 
 Read the `info:` and `warning:` lines that `convert` prints. They list everything that was converted differently, kept in the old format, or dropped.
 
@@ -138,6 +139,9 @@ These fixes apply to every pfSense → OPNsense conversion, not only 26.7:
 | The web GUI certificate was only carried over when a VPN used it | OPNsense **generated a new self-signed certificate** at boot | the referenced certificate (and its CA) is copied; otherwise the baseline's is kept |
 | pfSense stores descriptions HTML-encoded, sometimes twice (`kifel&amp;eacute;`, `serp-&gt;z7`) | entities showed literally in the OPNsense GUI | descriptions are decoded to plain text (`kifelé`, `serp->z7`) |
 | The merged `system` section (from pfSense) dropped OPNsense's `system/firmware` | update settings and the configured-plugin list were lost | the baseline's `system/firmware` is kept and the needed plugins are added to it |
+| The merged `system` section also dropped OPNsense-only settings | "Shared forwarding" (`pf_share_forward`) was off, unlike a fresh install, so the traffic shaper and captive portal ignored policy routing | `pf_share_forward` is kept from the baseline |
+| pfSense's NTP pool (`0.pfsense.pool.ntp.org`) was copied as is | time servers did not match OPNsense's defaults | a pfSense-pool-only list becomes the baseline's list; in mixed lists only the pool entries are renamed |
+| pfBlockerNG IP-list aliases download from pfBlockerNG on the pfSense box | the aliases **stayed empty** and their block rules matched nothing | a warning is printed; with `--pfblocker-feeds` the aliases use the original feeds |
 
 New features:
 
@@ -173,7 +177,7 @@ pfSense packages map to OPNsense plugins. A plugin's settings can only be conver
 | Zabbix Agent 6/7 | `os-zabbix6-agent` / `os-zabbix7-agent` | servers, active checks, hostname, listen address/port, tuning, PSK encryption (identity and key), user parameters. Certificate TLS is not supported by the plugin. |
 | node_exporter | `os-node_exporter` | enabled, listen interface (as its IP address), port, collectors. `boottime`, `textfile` and extra flags have no equivalent. |
 | Shellcmd `service qemu-guest-agent start` | `os-qemu-guest-agent` | enabled. Other Shellcmd commands are listed; use `/usr/local/etc/rc.syshook.d/` scripts. |
-| pfBlockerNG | none | not converted; use Unbound DNS blocklists and URL table aliases |
+| pfBlockerNG | none | DNSBL not converted, use Unbound DNS blocklists. IP lists: with `--pfblocker-feeds`, their `pfB_*` aliases download the original feeds |
 
 After `convert`, a `plugins:` report lists each plugin as `converted`, `NOT INSTALLED` (not in the baseline, settings not converted) or `no equivalent`. The plugins the source needs are also added to the configured-plugin list (`system/firmware/plugins`), so after a restore OPNsense shows missing ones under System → Firmware → Plugins and can install them.
 
@@ -263,6 +267,7 @@ pfopn-convert convert <INPUT> --output <FILE> --from <auto|pfsense|opnsense> --t
 - `--lan-ip <IPv4>` is optional; use it only if you want to change LAN IP/subnet and remap LAN DHCP ranges.
 - `--disable-dhcp` is optional; use it only if you want DHCP services off in the generated output.
 - `--legacy-rules` is optional; for OPNsense 26.7+ targets it keeps firewall and outbound NAT rules in the old format instead of converting them to the new rule model.
+- `--pfblocker-feeds` is optional; it points pfBlockerNG's `pfB_*` IP aliases at the original feed URLs (see below).
 - DHCP is enabled on an interface only if the source has `<enable>` for it. Ranges and static mappings of disabled interfaces are not turned on.
 - pfSense DHCP client IDs (`cid`) are not transferred to Kea reservations; the MAC address is used.
 - The tool lines up interfaces by names like `wan` and `lan`. The baseline tells it which device name (`igb0`, `vtnet0`) to use.
@@ -404,7 +409,7 @@ A pfSense 2.9.0 config was converted, restored and taken into production on OPNs
 
 ### Known limitations
 
-- **pfBlockerNG** is not converted. Its floating rules are removed; other rules that reference `pfB_*` aliases will point to aliases that do not exist on OPNsense.
+- **pfBlockerNG** is not converted. Its floating rules are removed. Its IP lists become `pfB_<list>_v4|v6` URL table aliases that download from pfBlockerNG on the pfSense box (`https://127.0.0.1/pfblockerng/pfblockerng.php?...`), so on OPNsense they stay empty and the interface rules that use them match nothing (a warning is printed). With `--pfblocker-feeds`, each alias gets the feed URLs of its list instead and refreshes on the list's schedule. Disabled rows, GeoIP/ASN sources, gzip files and feeds known to be dead are skipped, and DShield and Spamhaus EDROP are swapped for their current URLs; each change is printed. An alias left without a feed is disabled. This is opt-in because the block rules start blocking once the aliases fill. The DNSBL part (Unbound Python module) is not converted; set up Services → Unbound DNS → Blocklist.
 - **pfSense `match` and NAT64 rules** stay in the old rule format on 26.7 targets (still enforced, not editable in the GUI).
 - **Limiters, queues, OS fingerprint and DSCP** settings on rules are dropped (a warning is printed for each).
 - **1:1 NAT with a dynamic external address** (`wanip` and similar) is skipped.

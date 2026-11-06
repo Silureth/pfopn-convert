@@ -8,6 +8,32 @@ use xml_diff_core::XmlNode;
 pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, destination_baseline: &XmlNode) {
     copy_identity_fields(out, source);
     rebrand_vendor_pool(out, destination_baseline, "pfsense", "opnsense");
+    keep_baseline_only_keys(out, destination_baseline, OPNSENSE_ONLY_SYSTEM_KEYS);
+}
+
+/// OPNsense `system` settings with no pfSense counterpart, kept from the
+/// baseline so the result matches a fresh install:
+/// - `pf_share_forward`: share policy-routing decisions with the traffic
+///   shaper and captive portal (Firewall > Settings > Advanced > Shared
+///   forwarding; on by default).
+const OPNSENSE_ONLY_SYSTEM_KEYS: &[&str] = &["pf_share_forward"];
+
+/// Copy `keys` from the baseline's `system` when the output has none.
+fn keep_baseline_only_keys(out: &mut XmlNode, baseline: &XmlNode, keys: &[&str]) {
+    let Some(base_system) = baseline.get_child("system") else {
+        return;
+    };
+    let Some(system) = out.children.iter_mut().find(|n| n.tag == "system") else {
+        return;
+    };
+    for key in keys {
+        if system.get_child(key).is_some() {
+            continue;
+        }
+        if let Some(node) = base_system.get_child(key) {
+            system.children.push(node.clone());
+        }
+    }
 }
 
 /// Copy system identity and network settings to pfSense output.
@@ -234,6 +260,30 @@ mod tests {
             out.get_text(&["system", "timeservers"]),
             Some("0.opnsense.pool.ntp.org")
         );
+    }
+
+    #[test]
+    fn keeps_shared_forwarding_from_baseline() {
+        let source = parse(br#"<pfsense><system><hostname>gw</hostname></system></pfsense>"#)
+            .expect("parse");
+        let baseline = parse(
+            br#"<opnsense><system><pf_share_forward>1</pf_share_forward></system></opnsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(br#"<opnsense><system><hostname>gw</hostname></system></opnsense>"#)
+            .expect("parse");
+
+        to_opnsense(&mut out, &source, &baseline);
+        assert_eq!(out.get_text(&["system", "pf_share_forward"]), Some("1"));
+
+        // Without it in the baseline, nothing is added.
+        let mut out = parse(br#"<opnsense><system/></opnsense>"#).expect("parse");
+        let empty = parse(br#"<opnsense><system/></opnsense>"#).expect("parse");
+        to_opnsense(&mut out, &source, &empty);
+        assert!(out
+            .get_child("system")
+            .and_then(|s| s.get_child("pf_share_forward"))
+            .is_none());
     }
 
     #[test]
