@@ -5,8 +5,9 @@ use xml_diff_core::XmlNode;
 /// Transfers hostname, domain, DNS servers, NTP servers, and DNS settings from
 /// the source config to the output. These settings are platform-agnostic and
 /// work the same way in both pfSense and OPNsense.
-pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, _destination_baseline: &XmlNode) {
+pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, destination_baseline: &XmlNode) {
     copy_identity_fields(out, source);
+    rebrand_vendor_pool(out, destination_baseline, "pfsense", "opnsense");
 }
 
 /// Copy system identity and network settings to pfSense output.
@@ -14,8 +15,51 @@ pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, _destination_baseline: &
 /// Transfers hostname, domain, DNS servers, NTP servers, and DNS settings from
 /// the source config to the output. These settings are platform-agnostic and
 /// work the same way in both pfSense and OPNsense.
-pub fn to_pfsense(out: &mut XmlNode, source: &XmlNode, _destination_baseline: &XmlNode) {
+pub fn to_pfsense(out: &mut XmlNode, source: &XmlNode, destination_baseline: &XmlNode) {
     copy_identity_fields(out, source);
+    rebrand_vendor_pool(out, destination_baseline, "opnsense", "pfsense");
+}
+
+/// Replace the source vendor's NTP pool (`N.<from>.pool.ntp.org`) with the
+/// destination vendor's.
+///
+/// If every time server is the source vendor's pool (the factory default), the
+/// destination baseline's list is used instead, so the result matches a fresh
+/// install. Otherwise each vendor pool entry is renamed and the rest is kept.
+fn rebrand_vendor_pool(out: &mut XmlNode, baseline: &XmlNode, from: &str, to: &str) {
+    let from_suffix = format!(".{from}.pool.ntp.org");
+    let Some(system) = out.children.iter_mut().find(|n| n.tag == "system") else {
+        return;
+    };
+    let Some(current) = system.get_text(&["timeservers"]).map(str::to_string) else {
+        return;
+    };
+    let servers: Vec<&str> = current.split_whitespace().collect();
+    let is_vendor = |s: &str| s.to_ascii_lowercase().ends_with(&from_suffix);
+    if !servers.iter().any(|s| is_vendor(s)) {
+        return;
+    }
+
+    let baseline_servers = baseline
+        .get_text(&["system", "timeservers"])
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let new_value = match baseline_servers {
+        Some(b) if servers.iter().all(|s| is_vendor(s)) => b.to_string(),
+        _ => servers
+            .iter()
+            .map(|s| {
+                if is_vendor(s) {
+                    let host = &s[..s.len() - from_suffix.len()];
+                    format!("{host}.{to}.pool.ntp.org")
+                } else {
+                    (*s).to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    set_or_insert_text_child(system, "timeservers", &new_value);
 }
 
 /// Copy system identity fields from source to output.
@@ -135,6 +179,79 @@ mod tests {
         assert_eq!(
             out.get_text(&["system", "timeservers"]),
             Some("1.1.1.1 2.2.2.2")
+        );
+    }
+
+    #[test]
+    fn default_vendor_pool_uses_baseline_servers() {
+        let source = parse(
+            br#"<pfsense><system><timeservers>0.pfsense.pool.ntp.org</timeservers></system></pfsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(
+            br#"<opnsense><system><timeservers>0.opnsense.pool.ntp.org 1.opnsense.pool.ntp.org</timeservers></system></opnsense>"#,
+        )
+        .expect("parse");
+        let baseline = out.clone();
+
+        to_opnsense(&mut out, &source, &baseline);
+        assert_eq!(
+            out.get_text(&["system", "timeservers"]),
+            Some("0.opnsense.pool.ntp.org 1.opnsense.pool.ntp.org")
+        );
+    }
+
+    #[test]
+    fn mixed_list_renames_only_vendor_pool() {
+        let source = parse(
+            br#"<pfsense><system><timeservers>ntp.example.org 2.pfsense.pool.ntp.org 198.51.100.1</timeservers></system></pfsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(
+            br#"<opnsense><system><timeservers>0.opnsense.pool.ntp.org</timeservers></system></opnsense>"#,
+        )
+        .expect("parse");
+        let baseline = out.clone();
+
+        to_opnsense(&mut out, &source, &baseline);
+        assert_eq!(
+            out.get_text(&["system", "timeservers"]),
+            Some("ntp.example.org 2.opnsense.pool.ntp.org 198.51.100.1")
+        );
+    }
+
+    #[test]
+    fn vendor_pool_renamed_when_baseline_has_none() {
+        let source = parse(
+            br#"<pfsense><system><timeservers>0.pfsense.pool.ntp.org</timeservers></system></pfsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(br#"<opnsense><system></system></opnsense>"#).expect("parse");
+        let baseline = out.clone();
+
+        to_opnsense(&mut out, &source, &baseline);
+        assert_eq!(
+            out.get_text(&["system", "timeservers"]),
+            Some("0.opnsense.pool.ntp.org")
+        );
+    }
+
+    #[test]
+    fn opnsense_pool_becomes_pfsense_pool() {
+        let source = parse(
+            br#"<opnsense><system><timeservers>0.opnsense.pool.ntp.org 1.opnsense.pool.ntp.org</timeservers></system></opnsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(
+            br#"<pfsense><system><timeservers>2.pfsense.pool.ntp.org</timeservers></system></pfsense>"#,
+        )
+        .expect("parse");
+        let baseline = out.clone();
+
+        to_pfsense(&mut out, &source, &baseline);
+        assert_eq!(
+            out.get_text(&["system", "timeservers"]),
+            Some("2.pfsense.pool.ntp.org")
         );
     }
 
