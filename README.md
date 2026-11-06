@@ -43,6 +43,7 @@ The order that worked for a real cutover (pfSense → OPNsense, both as VMs):
 7. After the reboot, check the ruleset from the shell: `pfctl -nf /tmp/rules.debug`. A single invalid line stops pf from loading the whole ruleset, and the GUI only shows the first error.
 8. Check the GUI (rules, NAT, gateways, services). If something is wrong, roll back to the snapshot, fix, convert again.
 9. Cut over: shut the source down, move the destination's ports to the real networks. Optionally copy the source's WAN MAC addresses so upstream ARP caches keep working; then never run both at once.
+10. After the first boot on the real networks, **reset the firewall states** once (Diagnostics → States → Reset, or `pfctl -F states`). Devices that send UDP without pause (syslog, NetFlow, SNMP traps) can create states while the boot ruleset is still active, before the port forwards load. Those states never expire while the traffic continues, so the forward is never applied: the packets go to the firewall itself and are dropped, and restarting the sender doesn't help. To clear single senders: `pfctl -k <sender-ip>`.
 
 ## Quick Start (Do This)
 
@@ -187,6 +188,7 @@ The DNS Resolver and remote syslog conversions follow OPNsense's own legacy migr
 - Install the plugins the source needs **before** exporting the baseline, or their settings are not converted (the `plugins:` report shows `NOT INSTALLED`).
 - The output contains the source's IP addresses: restore it with only an isolated network connected.
 - After the reboot, run `pfctl -nf /tmp/rules.debug` in the shell. It lists every ruleset error, not just the first one the GUI shows.
+- After cutting over, reset the state table once (see step 10 of the [Safe Migration Workflow](#safe-migration-workflow)); otherwise constant UDP senders such as syslog can stay stuck on states created before the port forwards loaded.
 - If restore reports interface assignment warnings, reboot the destination and restore the same generated XML a second time.
 - This appears to be an intermittent OPNsense interface/apply behavior.
 
