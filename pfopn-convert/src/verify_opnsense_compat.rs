@@ -149,8 +149,14 @@ fn gateway_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
 /// Mirrors the rule checks in OPNsense's `Filter::performValidation` (26.7).
 fn rule_model_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
     const PORT_PROTOS: [&str; 3] = ["TCP", "UDP", "TCP/UDP"];
-    for (section, kind) in [("rules", "firewall rule"), ("snatrules", "outbound NAT rule")] {
-        let rules = children(path(root, &["OPNsense", "Firewall", "Filter", section]), "rule");
+    for (section, kind) in [
+        ("rules", "firewall rule"),
+        ("snatrules", "outbound NAT rule"),
+    ] {
+        let rules = children(
+            path(root, &["OPNsense", "Firewall", "Filter", section]),
+            "rule",
+        );
         for (idx, rule) in rules.iter().enumerate() {
             let get = |f: &str| rule.get_text(&[f]).map(str::trim).unwrap_or("").to_string();
             let protocol = get("protocol");
@@ -187,7 +193,11 @@ fn rule_model_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
                     format!(
                         "{kind} #{} {}is rejected by OPNsense on save: {}",
                         idx + 1,
-                        if descr.is_empty() { String::new() } else { format!("('{descr}') ") },
+                        if descr.is_empty() {
+                            String::new()
+                        } else {
+                            format!("('{descr}') ")
+                        },
                         problems.join("; ")
                     ),
                 ));
@@ -197,7 +207,10 @@ fn rule_model_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
 }
 
 fn icmp_any_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
-    let rules = children(path(root, &["OPNsense", "Firewall", "Filter", "rules"]), "rule");
+    let rules = children(
+        path(root, &["OPNsense", "Firewall", "Filter", "rules"]),
+        "rule",
+    );
     for (idx, rule) in rules.iter().enumerate() {
         let has_any = ["icmptype", "icmp6type"].iter().any(|f| {
             rule.get_text(&[f])
@@ -219,7 +232,10 @@ fn icmp_any_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
 }
 
 fn outbound_family_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
-    let rules = children(path(root, &["OPNsense", "Firewall", "Filter", "snatrules"]), "rule");
+    let rules = children(
+        path(root, &["OPNsense", "Firewall", "Filter", "snatrules"]),
+        "rule",
+    );
     for (idx, rule) in rules.iter().enumerate() {
         let family = rule.get_text(&["ipprotocol"]).unwrap_or("inet").trim();
         let mismatched: Vec<&str> = ["source_net", "destination_net", "target"]
@@ -241,7 +257,11 @@ fn outbound_family_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
                 format!(
                     "outbound NAT rule #{} {}is {family} but uses {}; pf rejects the whole ruleset",
                     idx + 1,
-                    if descr.is_empty() { String::new() } else { format!("('{descr}') ") },
+                    if descr.is_empty() {
+                        String::new()
+                    } else {
+                        format!("('{descr}') ")
+                    },
                     mismatched.join(", ")
                 ),
             ));

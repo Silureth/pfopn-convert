@@ -38,19 +38,19 @@ use anyhow::{bail, Context, Result};
 use xml_diff_core::{diff_with_options, parse_file, write_file, DiffOptions, XmlNode};
 
 use crate::cli::{ConvertArgs, Platform};
-use pfopn_convert::conversion_summary::{
-    render as render_conversion_summary, summarize as summarize_conversion,
-};
 use crate::interface_guard::enforce_interface_compat;
 use crate::path_guard::ensure_output_not_same;
 use crate::target_prune::prune_imported_incompatible_sections;
 use pfopn_convert::backend_detect::detect_dhcp_backend;
+use pfopn_convert::conversion_summary::{
+    render as render_conversion_summary, summarize as summarize_conversion,
+};
 use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
-    bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups, interface_presence,
-    interface_settings, lan_ip, logical_refs, nat_mvc, opn_plugins, opnsense_assignments,
-    pfblocker, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames, wireguard,
+    bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
+    interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, opn_plugins,
+    opnsense_assignments, pfblocker, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -197,7 +197,8 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                 "info: rewrote {flags} empty pfSense rule flag(s) (disabled/log/not/...) to explicit values for OPNsense"
             );
         }
-        let (iface_flags, block_fixed) = rule_flags::normalize_interface_flags_for_opnsense(&mut out);
+        let (iface_flags, block_fixed) =
+            rule_flags::normalize_interface_flags_for_opnsense(&mut out);
         if iface_flags > 0 {
             eprintln!(
                 "info: rewrote {iface_flags} empty pfSense interface flag(s) (enable/blockpriv/blockbogons/...) to explicit values for OPNsense"
@@ -286,8 +287,11 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                 eprintln!("warning: {warning}");
             }
             plugin_report = Some(opn_plugins::from_pfsense(&mut out, &input, &target));
-            let feeds =
-                pfblocker::rewrite_feed_aliases_for_opnsense(&mut out, &input, args.pfblocker_feeds);
+            let feeds = pfblocker::rewrite_feed_aliases_for_opnsense(
+                &mut out,
+                &input,
+                args.pfblocker_feeds,
+            );
             for (name, count) in &feeds.rewritten {
                 eprintln!("info: pointed pfBlockerNG alias {name} at {count} feed URL(s)");
             }
@@ -419,8 +423,7 @@ fn print_plugin_report(report: &opn_plugins::PluginReport) {
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
-    if report.converted.is_empty() && report.missing.is_empty() && report.no_equivalent.is_empty()
-    {
+    if report.converted.is_empty() && report.missing.is_empty() && report.no_equivalent.is_empty() {
         return;
     }
     eprintln!();

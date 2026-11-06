@@ -108,7 +108,11 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
         push(&mut dest, "certificate", "");
         push(&mut dest, "port", &port);
         push(&mut dest, "rfc5424", bool01(rfc5424));
-        push(&mut dest, "description", "Converted from pfSense remote syslog");
+        push(
+            &mut dest,
+            "description",
+            "Converted from pfSense remote syslog",
+        );
         destinations.children.push(dest);
         stats.destinations.push(format!("{host}:{port}"));
     }
@@ -119,7 +123,10 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
 fn split_host_port(value: &str) -> (String, String) {
     if let Some(rest) = value.strip_prefix('[') {
         if let Some((host, tail)) = rest.split_once(']') {
-            let port = tail.strip_prefix(':').filter(|p| !p.is_empty()).unwrap_or("514");
+            let port = tail
+                .strip_prefix(':')
+                .filter(|p| !p.is_empty())
+                .unwrap_or("514");
             return (host.to_string(), port.to_string());
         }
     }
@@ -154,9 +161,19 @@ mod tests {
         assert_eq!(stats.destinations, ["10.0.21.205:9001", "logs.example:514"]);
         assert!(stats.warnings.is_empty(), "{:?}", stats.warnings);
 
-        let model = out.get_child("OPNsense").unwrap().get_child("Syslog").unwrap();
-        assert_eq!(model.attributes.get("version").map(String::as_str), Some("1.0.2"));
-        let dests = model.get_child("destinations").unwrap().get_children("destination");
+        let model = out
+            .get_child("OPNsense")
+            .unwrap()
+            .get_child("Syslog")
+            .unwrap();
+        assert_eq!(
+            model.attributes.get("version").map(String::as_str),
+            Some("1.0.2")
+        );
+        let dests = model
+            .get_child("destinations")
+            .unwrap()
+            .get_children("destination");
         assert_eq!(dests.len(), 2);
         assert_eq!(dests[0].get_text(&["hostname"]), Some("10.0.21.205"));
         assert_eq!(dests[0].get_text(&["port"]), Some("9001"));
@@ -174,7 +191,9 @@ mod tests {
             br#"<pfsense><syslog><remoteserver>10.0.0.1</remoteserver><logall></logall></syslog></pfsense>"#,
         )
         .expect("parse");
-        assert!(from_pfsense(&mut out, &source, &baseline).destinations.is_empty());
+        assert!(from_pfsense(&mut out, &source, &baseline)
+            .destinations
+            .is_empty());
     }
 
     #[test]
@@ -191,9 +210,21 @@ mod tests {
 
     #[test]
     fn splits_host_and_port() {
-        assert_eq!(split_host_port("10.0.0.1:9001"), ("10.0.0.1".into(), "9001".into()));
-        assert_eq!(split_host_port("10.0.0.1"), ("10.0.0.1".into(), "514".into()));
-        assert_eq!(split_host_port("[2001:db8::1]:601"), ("2001:db8::1".into(), "601".into()));
-        assert_eq!(split_host_port("2001:db8::1"), ("2001:db8::1".into(), "514".into()));
+        assert_eq!(
+            split_host_port("10.0.0.1:9001"),
+            ("10.0.0.1".into(), "9001".into())
+        );
+        assert_eq!(
+            split_host_port("10.0.0.1"),
+            ("10.0.0.1".into(), "514".into())
+        );
+        assert_eq!(
+            split_host_port("[2001:db8::1]:601"),
+            ("2001:db8::1".into(), "601".into())
+        );
+        assert_eq!(
+            split_host_port("2001:db8::1"),
+            ("2001:db8::1".into(), "514".into())
+        );
     }
 }

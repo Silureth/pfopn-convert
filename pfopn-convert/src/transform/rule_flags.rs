@@ -82,7 +82,10 @@ pub fn normalize_interface_flags_for_opnsense(root: &mut XmlNode) -> (usize, Vec
         let had_empty_block = ["blockpriv", "blockbogons"].iter().any(|tag| {
             iface
                 .get_child(tag)
-                .map(|c| c.children.is_empty() && c.text.as_deref().map(str::trim).unwrap_or("").is_empty())
+                .map(|c| {
+                    c.children.is_empty()
+                        && c.text.as_deref().map(str::trim).unwrap_or("").is_empty()
+                })
                 .unwrap_or(false)
         });
         changed += set_empty_flags(iface, INTERFACE_FLAGS);
@@ -165,7 +168,10 @@ mod tests {
 
         let (changed, block_fixed) = normalize_interface_flags_for_opnsense(&mut root);
         assert_eq!(changed, 4);
-        assert_eq!(block_fixed, vec!["wan".to_string(), "opt1 (DMZ)".to_string()]);
+        assert_eq!(
+            block_fixed,
+            vec!["wan".to_string(), "opt1 (DMZ)".to_string()]
+        );
 
         let ifaces = root.get_child("interfaces").unwrap();
         assert_eq!(ifaces.get_text(&["wan", "enable"]), Some("1"));
@@ -175,7 +181,11 @@ mod tests {
         assert_eq!(ifaces.get_text(&["wan", "ipaddrv6"]).unwrap_or(""), "");
         assert_eq!(ifaces.get_text(&["wan", "spoofmac"]).unwrap_or(""), "");
         // A disabled interface (no <enable>) stays disabled.
-        assert!(ifaces.get_child("opt1").unwrap().get_child("enable").is_none());
+        assert!(ifaces
+            .get_child("opt1")
+            .unwrap()
+            .get_child("enable")
+            .is_none());
         assert_eq!(ifaces.get_text(&["opt1", "blockpriv"]), Some("1"));
     }
 

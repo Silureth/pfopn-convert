@@ -104,7 +104,10 @@ mod tests {
 
     #[test]
     fn decodes_base64() {
-        assert_eq!(decode_base64("aGVsbG8gd29ybGQ=").as_deref(), Some("hello world"));
+        assert_eq!(
+            decode_base64("aGVsbG8gd29ybGQ=").as_deref(),
+            Some("hello world")
+        );
         assert_eq!(decode_base64("YWI=\n").as_deref(), Some("ab"));
         assert_eq!(decode_base64("").as_deref(), Some(""));
         assert!(decode_base64("not*base64").is_none());

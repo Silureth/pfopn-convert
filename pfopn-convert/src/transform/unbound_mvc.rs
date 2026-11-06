@@ -85,20 +85,33 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
     };
     let known_ifaces: BTreeSet<String> = out
         .get_child("interfaces")
-        .map(|i| i.children.iter().map(|c| c.tag.to_ascii_lowercase()).collect())
+        .map(|i| {
+            i.children
+                .iter()
+                .map(|c| c.tag.to_ascii_lowercase())
+                .collect()
+        })
         .unwrap_or_default();
     let Some(model) = model_mut(out, baseline, MODEL_PATH) else {
-        stats
-            .warnings
-            .push("DNS Resolver: the baseline has no Unbound model; settings not converted".to_string());
+        stats.warnings.push(
+            "DNS Resolver: the baseline has no Unbound model; settings not converted".to_string(),
+        );
         return stats;
     };
     stats.converted = true;
 
     // --- general -----------------------------------------------------------
-    set_path(model, &["general", "enabled"], bool01(pf_flag_is_set(src, "enable")));
+    set_path(
+        model,
+        &["general", "enabled"],
+        bool01(pf_flag_is_set(src, "enable")),
+    );
     let port = text(src, "port");
-    set_path(model, &["general", "port"], if port.is_empty() { "53" } else { &port });
+    set_path(
+        model,
+        &["general", "port"],
+        if port.is_empty() { "53" } else { &port },
+    );
     for (pf, opn) in GENERAL_FLAGS {
         set_path(model, &["general", opn], bool01(pf_flag_is_set(src, pf)));
     }
@@ -130,11 +143,19 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
         }
     }
     if let Ok(queries) = text(src, "num_queries_per_thread").parse::<u64>() {
-        set_path(model, &["advanced", "outgoingrange"], &(queries * 2).to_string());
+        set_path(
+            model,
+            &["advanced", "outgoingrange"],
+            &(queries * 2).to_string(),
+        );
     }
     if let Ok(size) = text(src, "msgcachesize").parse::<u64>() {
         set_path(model, &["advanced", "msgcachesize"], &format!("{size}m"));
-        set_path(model, &["advanced", "rrsetcachesize"], &format!("{}m", size * 2));
+        set_path(
+            model,
+            &["advanced", "rrsetcachesize"],
+            &format!("{}m", size * 2),
+        );
     }
 
     // --- host overrides + aliases --------------------------------------------
@@ -169,8 +190,8 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
     }
 
     // --- not convertible ----------------------------------------------------
-    let custom = decode_base64(&text(src, "custom_options"))
-        .unwrap_or_else(|| text(src, "custom_options"));
+    let custom =
+        decode_base64(&text(src, "custom_options")).unwrap_or_else(|| text(src, "custom_options"));
     if !custom.trim().is_empty() {
         stats.warnings.push(
             "DNS Resolver: custom options not converted; put them in a .conf file under /usr/local/etc/unbound.opnsense.d/".to_string(),
@@ -180,7 +201,11 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
         let script = text(src, "python_script");
         stats.warnings.push(format!(
             "DNS Resolver: Python module{} not converted{}",
-            if script.is_empty() { String::new() } else { format!(" '{script}'") },
+            if script.is_empty() {
+                String::new()
+            } else {
+                format!(" '{script}'")
+            },
             if script.starts_with("pfb_") {
                 " (pfBlockerNG DNSBL; use Unbound DNS blocklists)"
             } else {
@@ -315,7 +340,11 @@ fn convert_domain_override(entry: &XmlNode, warnings: &mut Vec<String>) -> Optio
     push(&mut dot, "domain", &domain);
     push(&mut dot, "server", &server);
     push(&mut dot, "port", &port);
-    let verify = if tls { text(entry, "tls_hostname") } else { String::new() };
+    let verify = if tls {
+        text(entry, "tls_hostname")
+    } else {
+        String::new()
+    };
     push(&mut dot, "verify", &verify);
     push(&mut dot, "forward_tcp_upstream", "0");
     push(&mut dot, "forward_first", "0");
@@ -355,7 +384,12 @@ fn convert_acl(entry: &XmlNode, warnings: &mut Vec<String>) -> Vec<XmlNode> {
         if row_descr.is_empty() {
             shared.push(cidr);
         } else {
-            out.push(acl_node(&format!("{name}-{row_descr}"), action, &cidr, &description));
+            out.push(acl_node(
+                &format!("{name}-{row_descr}"),
+                action,
+                &cidr,
+                &description,
+            ));
         }
     }
     if !shared.is_empty() {
@@ -423,8 +457,15 @@ mod tests {
         assert_eq!(stats.forwards, 2);
         assert_eq!(stats.acls, 2);
 
-        let m = out.get_child("OPNsense").unwrap().get_child("unboundplus").unwrap();
-        assert_eq!(m.attributes.get("version").map(String::as_str), Some("1.0.15"));
+        let m = out
+            .get_child("OPNsense")
+            .unwrap()
+            .get_child("unboundplus")
+            .unwrap();
+        assert_eq!(
+            m.attributes.get("version").map(String::as_str),
+            Some("1.0.15")
+        );
         let t = |p: &[&str]| m.get_text(p).unwrap_or("").to_string();
         assert_eq!(t(&["general", "enabled"]), "1");
         assert_eq!(t(&["general", "dnssec"]), "1", "empty pfSense element = on");
@@ -445,7 +486,9 @@ mod tests {
         assert_eq!(hosts[3].get_text(&["enabled"]), Some("0"));
         let aliases = m.get_child("aliases").unwrap().get_children("alias");
         let host_uuid = hosts[0].attributes.get("uuid").unwrap();
-        assert!(aliases.iter().all(|a| a.get_text(&["host"]) == Some(host_uuid.as_str())));
+        assert!(aliases
+            .iter()
+            .all(|a| a.get_text(&["host"]) == Some(host_uuid.as_str())));
 
         let dots = m.get_child("dots").unwrap().get_children("dot");
         assert_eq!(dots[0].get_text(&["domain"]), Some("example.net"));

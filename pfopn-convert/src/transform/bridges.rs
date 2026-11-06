@@ -40,7 +40,12 @@ pub fn normalize_for_opnsense(root: &mut XmlNode) {
 pub fn is_empty_placeholder(bridged: &XmlNode) -> bool {
     bridged.children.is_empty()
         && bridged.attributes.is_empty()
-        && bridged.text.as_deref().map(str::trim).unwrap_or("").is_empty()
+        && bridged
+            .text
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
 }
 
 /// Normalizes bridge configuration for pfSense format.
@@ -128,10 +133,9 @@ mod tests {
 
     #[test]
     fn leaves_empty_opnsense_placeholder_alone() {
-        let mut root = parse(
-            br#"<opnsense><bridges version="1.0.0"><bridged/></bridges></opnsense>"#,
-        )
-        .expect("parse");
+        let mut root =
+            parse(br#"<opnsense><bridges version="1.0.0"><bridged/></bridges></opnsense>"#)
+                .expect("parse");
         normalize_for_opnsense(&mut root);
         let bridged = root
             .get_child("bridges")

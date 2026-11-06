@@ -185,7 +185,10 @@ mod tests {
             .collect();
         assert!(refids.contains(&"cert:pfcert".to_string()));
         assert!(refids.contains(&"ca:ca1".to_string()));
-        assert_eq!(out.get_text(&["system", "webgui", "ssl-certref"]), Some("pfcert"));
+        assert_eq!(
+            out.get_text(&["system", "webgui", "ssl-certref"]),
+            Some("pfcert")
+        );
     }
 
     #[test]
@@ -200,7 +203,10 @@ mod tests {
         )
         .expect("parse");
         to_opnsense(&mut out, &source, &baseline);
-        assert_eq!(out.get_text(&["system", "webgui", "ssl-certref"]), Some("opncert"));
+        assert_eq!(
+            out.get_text(&["system", "webgui", "ssl-certref"]),
+            Some("opncert")
+        );
     }
 
     #[test]

@@ -153,12 +153,24 @@ fn map_gateway(item: &XmlNode, default_names: &[String], stats: &mut GatewayMvcS
     push(
         &mut node,
         "ipprotocol",
-        if ipprotocol.is_empty() { "inet" } else { &ipprotocol },
+        if ipprotocol.is_empty() {
+            "inet"
+        } else {
+            &ipprotocol
+        },
     );
     // "dynamic" marks a DHCP/PPP gateway; OPNsense stores it as empty.
-    push(&mut node, "gateway", &text(item, "gateway").replace("dynamic", ""));
+    push(
+        &mut node,
+        "gateway",
+        &text(item, "gateway").replace("dynamic", ""),
+    );
     let weight = text(item, "weight");
-    push(&mut node, "weight", if weight.is_empty() { "1" } else { &weight });
+    push(
+        &mut node,
+        "weight",
+        if weight.is_empty() { "1" } else { &weight },
+    );
 
     for field in COPIED {
         let mut value = text(item, field);
@@ -256,15 +268,29 @@ mod tests {
         assert_eq!(stats.moved, 4);
         assert_eq!(stats.baseline_replaced, 1);
         assert_eq!(stats.default_gateways, vec!["GW_WAN".to_string()]);
-        assert!(stats.dropped_fields.is_empty(), "{:?}", stats.dropped_fields);
+        assert!(
+            stats.dropped_fields.is_empty(),
+            "{:?}",
+            stats.dropped_fields
+        );
 
         let legacy = out.get_child("gateways").unwrap();
         assert!(legacy.get_child("gateway_item").is_none());
         assert!(legacy.get_child("defaultgw4").is_none());
-        assert!(legacy.get_child("gateway_group").is_some(), "groups stay legacy");
+        assert!(
+            legacy.get_child("gateway_group").is_some(),
+            "groups stay legacy"
+        );
 
-        let model = out.get_child("OPNsense").unwrap().get_child("Gateways").unwrap();
-        assert_eq!(model.attributes.get("version").map(String::as_str), Some("1.0.0"));
+        let model = out
+            .get_child("OPNsense")
+            .unwrap()
+            .get_child("Gateways")
+            .unwrap();
+        assert_eq!(
+            model.attributes.get("version").map(String::as_str),
+            Some("1.0.0")
+        );
         let gws = model.get_children("gateway_item");
         let names: Vec<_> = gws.iter().map(|g| g.get_text(&["name"]).unwrap()).collect();
         assert_eq!(names, ["GW_WAN", "WAN2_GW", "MGMT_GW", "WAN_DHCP6"]);
@@ -292,6 +318,10 @@ mod tests {
         .expect("parse");
         let stats = move_legacy_gateways_to_mvc(&mut out, &baseline);
         assert_eq!(stats.moved, 0);
-        assert!(out.get_child("gateways").unwrap().get_child("gateway_item").is_some());
+        assert!(out
+            .get_child("gateways")
+            .unwrap()
+            .get_child("gateway_item")
+            .is_some());
     }
 }

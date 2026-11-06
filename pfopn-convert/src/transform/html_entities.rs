@@ -349,10 +349,19 @@ mod tests {
 
     #[test]
     fn decodes_single_and_double_encoded_entities() {
-        assert_eq!(decode("zabbix kifel&amp;eacute; saj&amp;aacute;t ip"), "zabbix kifel\u{e9} saj\u{e1}t ip");
+        assert_eq!(
+            decode("zabbix kifel&amp;eacute; saj&amp;aacute;t ip"),
+            "zabbix kifel\u{e9} saj\u{e1}t ip"
+        );
         assert_eq!(decode("serp-&gt;z7"), "serp->z7");
-        assert_eq!(decode("&lt;tag&gt; &quot;q&quot; &apos;a&apos; &#39;n&#x41;"), "<tag> \"q\" 'a' 'nA");
-        assert_eq!(decode("R&D & co; &unknown; &amp"), "R&D & co; &unknown; &amp");
+        assert_eq!(
+            decode("&lt;tag&gt; &quot;q&quot; &apos;a&apos; &#39;n&#x41;"),
+            "<tag> \"q\" 'a' 'nA"
+        );
+        assert_eq!(
+            decode("R&D & co; &unknown; &amp"),
+            "R&D & co; &unknown; &amp"
+        );
         assert_eq!(decode("&Ouml;&ouml;&uuml;"), "\u{d6}\u{f6}\u{fc}");
     }
 
@@ -365,6 +374,9 @@ mod tests {
         assert_eq!(decode_descriptions(&mut root), 2);
         assert_eq!(root.get_text(&["filter", "rule", "descr"]), Some("a > b"));
         assert_eq!(root.get_text(&["filter", "rule", "tag"]), Some("x&y"));
-        assert_eq!(root.get_text(&["aliases", "alias", "description"]), Some("\u{e9}"));
+        assert_eq!(
+            root.get_text(&["aliases", "alias", "description"]),
+            Some("\u{e9}")
+        );
     }
 }

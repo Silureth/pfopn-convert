@@ -70,21 +70,24 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
                     report.converted.push((plugin, name));
                 }
                 Some(_) => report.missing.push((plugin, name)),
-                None => report
-                    .warnings
-                    .push(format!("{name}: package has no settings; nothing to convert")),
+                None => report.warnings.push(format!(
+                    "{name}: package has no settings; nothing to convert"
+                )),
             }
         } else if key.contains("node_exporter") || key.contains("node-exporter") {
             let plugin = "os-node_exporter".to_string();
-            match packages.get_child("nodeexporter").and_then(|n| n.get_child("config")) {
+            match packages
+                .get_child("nodeexporter")
+                .and_then(|n| n.get_child("config"))
+            {
                 Some(cfg) if node_at(baseline, NODE_EXPORTER_MODEL).is_some() => {
                     convert_node_exporter(out, baseline, cfg, &mut report.warnings);
                     report.converted.push((plugin, name));
                 }
                 Some(_) => report.missing.push((plugin, name)),
-                None => report
-                    .warnings
-                    .push(format!("{name}: package has no settings; nothing to convert")),
+                None => report.warnings.push(format!(
+                    "{name}: package has no settings; nothing to convert"
+                )),
             }
         } else if key.contains("shellcmd") {
             convert_shellcmds(out, baseline, packages, &name, &mut report);
@@ -133,12 +136,21 @@ fn zabbix_config(packages: &XmlNode) -> Option<&XmlNode> {
         .find_map(|c| c.get_child("config"))
 }
 
-fn convert_zabbix(out: &mut XmlNode, baseline: &XmlNode, cfg: &XmlNode, warnings: &mut Vec<String>) {
+fn convert_zabbix(
+    out: &mut XmlNode,
+    baseline: &XmlNode,
+    cfg: &XmlNode,
+    warnings: &mut Vec<String>,
+) {
     let Some(model) = model_mut(out, baseline, ZABBIX_MODEL) else {
         return;
     };
     let on = |tag: &str| matches!(text(cfg, tag).as_str(), "on" | "yes" | "1");
-    set_path(model, &["settings", "main", "enabled"], bool01(on("agentenabled")));
+    set_path(
+        model,
+        &["settings", "main", "enabled"],
+        bool01(on("agentenabled")),
+    );
     for (pf, path) in [
         ("hostname", &["local", "hostname"][..]),
         ("server", &["settings", "main", "serverList"][..]),
@@ -149,7 +161,10 @@ fn convert_zabbix(out: &mut XmlNode, baseline: &XmlNode, cfg: &XmlNode, warnings
         ("buffersend", &["settings", "tuning", "bufferSend"][..]),
         ("buffersize", &["settings", "tuning", "bufferSize"][..]),
         ("timeout", &["settings", "tuning", "timeout"][..]),
-        ("refreshactchecks", &["settings", "features", "refreshActiveChecks"][..]),
+        (
+            "refreshactchecks",
+            &["settings", "features", "refreshActiveChecks"][..],
+        ),
     ] {
         let value = text(cfg, pf);
         if !value.is_empty() {
@@ -162,7 +177,11 @@ fn convert_zabbix(out: &mut XmlNode, baseline: &XmlNode, cfg: &XmlNode, warnings
         &["settings", "features", "enableActiveChecks"],
         bool01(!active.is_empty()),
     );
-    set_path(model, &["settings", "features", "activeCheckServers"], &active);
+    set_path(
+        model,
+        &["settings", "features", "activeCheckServers"],
+        &active,
+    );
 
     let connect = text(cfg, "tlsconnect");
     let accept = text(cfg, "tlsaccept");
@@ -191,10 +210,16 @@ fn convert_zabbix(out: &mut XmlNode, baseline: &XmlNode, cfg: &XmlNode, warnings
 
     let params = decode_base64(&text(cfg, "userparams")).unwrap_or_default();
     let mut items = Vec::new();
-    for line in params.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+    for line in params
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
         let body = line.strip_prefix("UserParameter=").unwrap_or(line);
         let Some((key, command)) = body.split_once(',') else {
-            warnings.push(format!("Zabbix agent: user parameter line not understood: {line}"));
+            warnings.push(format!(
+                "Zabbix agent: user parameter line not understood: {line}"
+            ));
             continue;
         };
         let (key, accept_params) = match key.strip_suffix("[*]") {
@@ -395,27 +420,50 @@ mod tests {
         let missing: Vec<&str> = report.missing.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(converted, ["os-qemu-guest-agent", "os-zabbix7-agent"]);
         assert_eq!(missing, ["os-node_exporter"]);
-        assert!(report.no_equivalent.iter().any(|n| n.starts_with("pfBlockerNG-devel")));
+        assert!(report
+            .no_equivalent
+            .iter()
+            .any(|n| n.starts_with("pfBlockerNG-devel")));
         assert!(report.warnings.iter().any(|w| w.contains("/root/fix.sh")));
 
-        let z = out.get_child("OPNsense").unwrap().get_child("ZabbixAgent").unwrap();
+        let z = out
+            .get_child("OPNsense")
+            .unwrap()
+            .get_child("ZabbixAgent")
+            .unwrap();
         let t = |p: &[&str]| z.get_text(p).unwrap_or("").to_string();
         assert_eq!(t(&["settings", "main", "enabled"]), "1");
         assert_eq!(t(&["local", "hostname"]), "FW-TEST");
         assert_eq!(t(&["settings", "main", "serverList"]), "10.0.21.245");
         assert_eq!(t(&["settings", "features", "enableActiveChecks"]), "1");
         assert_eq!(t(&["settings", "features", "encryption"]), "1");
-        assert_eq!(t(&["settings", "features", "encryptionidentity"]), "test_psk");
-        assert_eq!(t(&["settings", "features", "encryptionpsk"]), "0123456789abcdef");
-        let params = z.get_child("userparameters").unwrap().get_children("userparameter");
+        assert_eq!(
+            t(&["settings", "features", "encryptionidentity"]),
+            "test_psk"
+        );
+        assert_eq!(
+            t(&["settings", "features", "encryptionpsk"]),
+            "0123456789abcdef"
+        );
+        let params = z
+            .get_child("userparameters")
+            .unwrap()
+            .get_children("userparameter");
         assert_eq!(params[0].get_text(&["key"]), Some("custom.ping"));
         assert_eq!(params[0].get_text(&["acceptParams"]), Some("1"));
         assert_eq!(params[0].get_text(&["command"]), Some("ping -c1 $1"));
         assert_eq!(params[1].get_text(&["key"]), Some("custom.uptime"));
 
-        let q = out.get_child("OPNsense").unwrap().get_child("QemuGuestAgent").unwrap();
+        let q = out
+            .get_child("OPNsense")
+            .unwrap()
+            .get_child("QemuGuestAgent")
+            .unwrap();
         assert_eq!(q.get_text(&["general", "Enabled"]), Some("1"));
-        assert_eq!(q.attributes.get("version").map(String::as_str), Some("1.0.0"));
+        assert_eq!(
+            q.attributes.get("version").map(String::as_str),
+            Some("1.0.0")
+        );
 
         assert_eq!(
             out.get_text(&["system", "firmware", "plugins"]),
@@ -435,13 +483,23 @@ mod tests {
         )
         .expect("parse");
         let report = from_pfsense(&mut out, &source, &baseline);
-        assert!(report.converted.iter().any(|(p, _)| p == "os-node_exporter"));
-        let n = out.get_child("OPNsense").unwrap().get_child("NodeExporter").unwrap();
+        assert!(report
+            .converted
+            .iter()
+            .any(|(p, _)| p == "os-node_exporter"));
+        let n = out
+            .get_child("OPNsense")
+            .unwrap()
+            .get_child("NodeExporter")
+            .unwrap();
         assert_eq!(n.get_text(&["enabled"]), Some("1"));
         assert_eq!(n.get_text(&["listenaddress"]), Some("10.0.21.254"));
         assert_eq!(n.get_text(&["cpu"]), Some("1"));
         assert_eq!(n.get_text(&["zfs"]), Some("0"));
-        assert!(report.warnings.iter().any(|w| w.contains("boottime, textfile")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|w| w.contains("boottime, textfile")));
         assert!(report.warnings.iter().any(|w| w.contains("extra flags")));
     }
 }

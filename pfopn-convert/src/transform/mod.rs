@@ -29,6 +29,6 @@ pub mod system_users;
 pub mod tailscale;
 pub mod unbound_mvc;
 pub mod users;
+pub(crate) mod version;
 pub mod vlan_ifnames;
 pub mod wireguard;
-pub(crate) mod version;

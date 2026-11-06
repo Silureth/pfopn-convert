@@ -246,10 +246,18 @@ fn classify_feed(lower_url: &str) -> FeedStatus {
     if let Some((_, reason)) = DEAD_FEEDS.iter().find(|(p, _)| lower_url.contains(p)) {
         return FeedStatus::Drop(reason);
     }
-    if let Some((_, new_url, reason)) = REPLACED_FEEDS.iter().find(|(p, _, _)| lower_url.contains(p)) {
+    if let Some((_, new_url, reason)) = REPLACED_FEEDS
+        .iter()
+        .find(|(p, _, _)| lower_url.contains(p))
+    {
         return FeedStatus::Replace(new_url, reason);
     }
-    if lower_url.split(['?', '#']).next().unwrap_or("").ends_with(".gz") {
+    if lower_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .ends_with(".gz")
+    {
         return FeedStatus::Drop("OPNsense URL tables cannot read gzip files");
     }
     FeedStatus::Keep
@@ -259,12 +267,9 @@ fn classify_feed(lower_url: &str) -> FeedStatus {
 /// `pfblockernglistsv4`, `_v6` in `pfblockernglistsv6`.
 fn find_pfblocker_list<'a>(source: &'a XmlNode, feed_alias: &str) -> Option<&'a XmlNode> {
     let lower = feed_alias.to_ascii_lowercase();
-    let (stem, section) = if let Some(stem) = lower.strip_suffix("_v4") {
-        (stem, "pfblockernglistsv4")
-    } else if let Some(stem) = lower.strip_suffix("_v6") {
-        (stem, "pfblockernglistsv6")
-    } else {
-        return None;
+    let (stem, section) = match lower.strip_suffix("_v4") {
+        Some(stem) => (stem, "pfblockernglistsv4"),
+        None => (lower.strip_suffix("_v6")?, "pfblockernglistsv6"),
     };
     let stem = stem.strip_prefix("pfb_").unwrap_or(stem);
     node_at(source, &["installedpackages", section])?
@@ -405,12 +410,18 @@ mod tests {
         assert_eq!(pri1.get_text(&["enabled"]), Some("1"));
 
         let geo = alias(&out, "pfB_Geo_List_v4");
-        assert_eq!(geo.get_text(&["content"]), Some("https://feeds.example.org/b.txt"));
+        assert_eq!(
+            geo.get_text(&["content"]),
+            Some("https://feeds.example.org/b.txt")
+        );
         assert_eq!(geo.get_text(&["updatefreq"]), Some("1"));
 
         let pri2 = alias(&out, "pfB_PRI2_v4");
         assert_eq!(pri2.get_text(&["enabled"]), Some("0"));
-        assert!(pri2.get_text(&["content"]).unwrap_or("").contains("pfblockerng.php"));
+        assert!(pri2
+            .get_text(&["content"])
+            .unwrap_or("")
+            .contains("pfblockerng.php"));
 
         assert_eq!(
             alias(&out, "other").get_text(&["content"]),
@@ -419,8 +430,14 @@ mod tests {
         assert_eq!(report.rewritten.len(), 2);
         assert_eq!(report.disabled, vec!["pfB_PRI2_v4".to_string()]);
         assert!(report.left_local.is_empty());
-        assert!(report.warnings.iter().any(|w| w.contains("ransomwaretracker")));
-        assert!(report.warnings.iter().any(|w| w.contains("gzip") || w.contains("AlienVault")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|w| w.contains("ransomwaretracker")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|w| w.contains("gzip") || w.contains("AlienVault")));
         assert!(report.warnings.iter().any(|w| w.contains("XX_v4.txt")));
     }
 

@@ -231,9 +231,10 @@ fn self_bypass_rule(rule: &XmlNode) -> Option<XmlNode> {
     }
     let mut bypass = rule.clone();
     let uuid = rule.attributes.get("uuid").cloned().unwrap_or_default();
-    bypass
-        .attributes
-        .insert("uuid".to_string(), stable_uuid(&format!("self-bypass|{uuid}")));
+    bypass.attributes.insert(
+        "uuid".to_string(),
+        stable_uuid(&format!("self-bypass|{uuid}")),
+    );
     bypass.children.retain(|c| c.tag != "gateway");
     set_child_text(&mut bypass, "destination_net", "(self)");
     let descr = field("description");
@@ -242,7 +243,11 @@ fn self_bypass_rule(rule: &XmlNode) -> Option<XmlNode> {
         "description",
         &format!(
             "pfopn-convert: no policy routing to this firewall{}",
-            if descr.is_empty() { String::new() } else { format!(" ({descr})") }
+            if descr.is_empty() {
+                String::new()
+            } else {
+                format!(" ({descr})")
+            }
         )
         .chars()
         .take(255)
@@ -631,12 +636,8 @@ fn map_outbound_rule(
     let source_net = outbound_network(source);
     let destination_net = outbound_network(destination);
     let target = outbound_target(rule, &interface);
-    let ipprotocol = outbound_ipprotocol(
-        rule,
-        [&source_net, &destination_net, &target],
-        label,
-        stats,
-    );
+    let ipprotocol =
+        outbound_ipprotocol(rule, [&source_net, &destination_net, &target], label, stats);
     push(&mut node, "ipprotocol", ipprotocol);
     let has_ports = ["sourceport", "dstport", "natport"]
         .iter()
@@ -1148,10 +1149,18 @@ mod tests {
             .collect();
         assert_eq!(
             summary,
-            ["1:opt4:-", "11:(self):-", "21:any:WAN2_GW", "31:opt2:MGMT_GW"]
+            [
+                "1:opt4:-",
+                "11:(self):-",
+                "21:any:WAN2_GW",
+                "31:opt2:MGMT_GW"
+            ]
         );
         assert_eq!(rules[1].get_text(&["protocol"]), Some("TCP/UDP"));
-        assert_ne!(rules[1].attributes.get("uuid"), rules[2].attributes.get("uuid"));
+        assert_ne!(
+            rules[1].attributes.get("uuid"),
+            rules[2].attributes.get("uuid")
+        );
     }
 
     #[test]
@@ -1167,7 +1176,10 @@ mod tests {
         )
         .expect("parse");
         move_legacy_rules_to_mvc(&mut out, &baseline);
-        assert_eq!(mvc_rules(&out, "rules")[0].get_text(&["protocol"]), Some("TCP/UDP"));
+        assert_eq!(
+            mvc_rules(&out, "rules")[0].get_text(&["protocol"]),
+            Some("TCP/UDP")
+        );
         let snat = mvc_rules(&out, "snatrules");
         assert_eq!(snat[0].get_text(&["protocol"]), Some("TCP/UDP"));
         assert_eq!(snat[0].get_text(&["destination_port"]), Some("500"));
