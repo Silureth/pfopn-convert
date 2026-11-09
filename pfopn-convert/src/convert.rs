@@ -48,7 +48,7 @@ use pfopn_convert::conversion_summary::{
 use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
-    bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
+    auth_servers, bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
     interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, opn_plugins,
     opnsense_assignments, pfblocker, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames, wireguard,
 };
@@ -274,6 +274,16 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                 );
             }
             for warning in &dns.warnings {
+                eprintln!("warning: {warning}");
+            }
+            let auth = auth_servers::ldap_for_opnsense(&mut out);
+            if !auth.converted.is_empty() {
+                eprintln!(
+                    "info: adjusted LDAP server(s) for OPNsense: {}",
+                    auth.converted.join(", ")
+                );
+            }
+            for warning in &auth.warnings {
                 eprintln!("warning: {warning}");
             }
             let syslog = syslog_mvc::from_pfsense(&mut out, &input, &target);

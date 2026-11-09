@@ -102,6 +102,7 @@ fn fallback_plugin_matrix() -> PluginMatrix {
                     "openvpn".to_string(),
                     "ovpnserver".to_string(),
                     "openvpn-client-export".to_string(),
+                    "openvpn client export utility".to_string(),
                 ],
                 opnsense_markers: vec!["openvpn".to_string(), "os-openvpn-legacy".to_string()],
                 compatible_targets: vec!["pfsense".to_string(), "opnsense".to_string()],

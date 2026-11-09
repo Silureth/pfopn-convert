@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+VPN conversions, checked against pfSense 2.7's and OPNsense 26.7.8's code. OPNsense 26.7 only runs legacy OpenVPN servers and IPsec tunnels with the os-openvpn-legacy / os-strongswan-legacy plugins, so both are now converted completely and the legacy copies removed.
+
+### OpenVPN
+
+- Servers become complete instances: LDAP/local user authentication with the client-certificate mode pfSense used, the TLS key (auth or crypt) as an OPNsense static key, data ciphers and digest (checked against OPNsense's lists), bind address, redirect-gateway, client-to-client, duplicate CN, float, keepalive, CRL, IPv6 tunnel and routes.
+- Client-specific overrides are converted as OPNsense's own migration does.
+- Fields OPNsense's model does not have (custom options, NetBIOS) are no longer written; they are reported instead. `register-dns` is no longer pushed twice.
+- Clients and shared-key servers are not converted (warning; they stay in the legacy section).
+
+### IPsec
+
+- Tunnels are converted the way pfSense builds them: IKE and ESP proposals per encryption item (renamed to OPNsense's spelling and checked against its list), IKE version, rekey/reauth/over time, DPD, start/close/DPD actions, IKE IDs, interface subnets as traffic selectors (`lan` used to become an empty selector), one merged child per IKEv2 tunnel unless "split connections" is set.
+- Pre-shared keys are bound to the peer's ID; previously every key had an empty ID.
+- `<ipsec><enable>` is set; without it OPNsense stops strongSwan.
+- Firewall rules for IKE, NAT-T and ESP from each peer are added, as pfSense did automatically.
+- The baseline's IPsec and Swanctl settings are kept instead of being replaced.
+- Mobile tunnels and VTI phase 2 entries are not converted (warning).
+
+### Other
+
+- Zabbix Proxy 6/7 → `os-zabbix6-proxy` / `os-zabbix7-proxy`.
+- LDAP servers: pfSense's "STARTTLS Encrypt" is mapped to OPNsense's StartTLS (it became LDAPS); a disabled extended query is cleared.
+- `scan` knows Zabbix Proxy and the OpenVPN Client Export package.
+
 ## v0.2.0 (2026-11-06)
 
 First release of this fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert), focused on **pfSense CE 2.8 / 2.9 → OPNsense 26.7**. It was used for a real pfSense 2.9.0 → OPNsense 26.7.8 migration; see [Tested migration](https://github.com/Silureth/pfopn-convert#tested-migration) for what that covered and what it did not.

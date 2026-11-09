@@ -144,6 +144,10 @@ These fixes apply to every pfSense → OPNsense conversion, not only 26.7:
 | The merged `system` section also dropped OPNsense-only settings | "Shared forwarding" (`pf_share_forward`) was off, unlike a fresh install, so the traffic shaper and captive portal ignored policy routing | `pf_share_forward` is kept from the baseline |
 | pfSense's NTP pool (`0.pfsense.pool.ntp.org`) was copied as is | time servers did not match OPNsense's defaults | a pfSense-pool-only list becomes the baseline's list; in mixed lists only the pool entries are renamed |
 | pfBlockerNG IP-list aliases download from pfBlockerNG on the pfSense box | the aliases **stayed empty** and their block rules matched nothing | a warning is printed; with `--pfblocker-feeds` the aliases use the original feeds |
+| OpenVPN servers were kept in the legacy format too, and the converted instance lacked user authentication, the TLS key, ciphers, the bind address and most options; 26.7 only runs legacy servers with the os-openvpn-legacy plugin | the server **did not start**, or would have started **without user authentication**; with the legacy plugin installed, two servers on one port | full instance (auth server, client-certificate mode, TLS auth/crypt key as a static key, ciphers, digest, flags, keepalive, redirect-gateway, CRL) plus client-specific overrides; the legacy copy is removed |
+| IPsec tunnels: proposals were always "default", the IKE version "auto", the `radius` pool was set, DPD's failure count was used as seconds, `lan`-type phase 2 networks became empty selectors, IDs were empty, IPsec was not switched on, the legacy copy was kept | tunnels **did not come up** (strongSwan stopped without `<ipsec><enable>`), or negotiated other algorithms; with several PSKs and no IDs the wrong key could be used | pfSense's own derivation: proposals per encryption item (checked against OPNsense's list), IKE version, lifetimes, DPD and start/close actions, IDs, interface subnets; IKEv2 phase 2 entries merged into one child as pfSense does; IPsec enabled |
+| pfSense adds firewall rules for IKE, NAT-T and ESP from each IPsec peer automatically; OPNsense only does so for legacy tunnels | peers **could not reach** the firewall after the conversion | the rules are added at the top of the converted ruleset (unless pfSense's "disable auto-added VPN rules" is set) |
+| LDAP servers: pfSense's "STARTTLS Encrypt" transport is not one OPNsense recognises, and OPNsense applies the extended query even when pfSense had it switched off | StartTLS servers were contacted over **LDAPS**; logins were filtered by a disabled query | transports mapped to OPNsense's values; a disabled extended query is cleared |
 
 New features:
 
@@ -177,6 +181,8 @@ pfSense packages map to OPNsense plugins. A plugin's settings can only be conver
 | pfSense package | OPNsense plugin | Converted |
 |---|---|---|
 | Zabbix Agent 6/7 | `os-zabbix6-agent` / `os-zabbix7-agent` | servers, active checks, hostname, listen address/port, tuning, PSK encryption (identity and key), user parameters. Certificate TLS is not supported by the plugin. |
+| Zabbix Proxy 6/7 | `os-zabbix6-proxy` / `os-zabbix7-proxy` | enabled, active/passive mode, server and port, hostname, listen address/port, source address, config frequency, trappers, PSK encryption. TrapperTimeout, the SNMP trapper, advanced parameters and certificate TLS have no plugin setting (warnings). |
+| OpenVPN Client Export | built in (VPN → OpenVPN → Client Export) | nothing to convert |
 | node_exporter | `os-node_exporter` | enabled, listen interface (as its IP address), port, collectors. `boottime`, `textfile` and extra flags have no equivalent. |
 | Shellcmd `service qemu-guest-agent start` | `os-qemu-guest-agent` | enabled. Other Shellcmd commands are listed; use `/usr/local/etc/rc.syshook.d/` scripts. |
 | pfBlockerNG | none | DNSBL not converted, use Unbound DNS blocklists. IP lists: with `--pfblocker-feeds`, their `pfB_*` aliases download the original feeds |
@@ -417,9 +423,10 @@ A pfSense 2.9.0 config was converted, restored and taken into production on OPNs
 - **1:1 NAT with a dynamic external address** (`wanip` and similar) is skipped.
 - **Alias per-entry descriptions** (pfSense `detail`) are dropped, and `url_ports`/`urltable_ports` aliases become empty port aliases, as in OPNsense's own migration.
 - **Port forwards** lose their link to the filter rule on 26.7 (the rule stays).
-- **IPsec phase 2** uses OPNsense's default ESP proposals; pfSense's per-tunnel encryption settings are not mapped.
+- **IPsec:** mobile (remote access) tunnels and route-based (VTI) phase 2 entries are not converted; they stay in the legacy section (warnings). Proposals OPNsense does not list (for example 3DES, GCM with short ICVs, a separate PRF) are dropped with a warning, keep-alive ping hosts and phase 2 NAT/BINAT are not converted, and AH phase 2 entries fall back to ESP.
+- **OpenVPN:** clients and shared-key servers are not converted (they stay in the legacy section; warnings). Custom options, NetBIOS/WINS, compression and per-client connection limits have no instance setting (warnings).
 - **Kea client IDs** from pfSense static mappings are not transferred.
-- **pfSense-only `system` settings** (for example `earlyshellcmd`, `pkg_repo_conf_path`) are carried over; OPNsense ignores them. Time server names are kept as they are (for example `0.pfsense.pool.ntp.org`).
+- **pfSense-only `system` settings** (for example `earlyshellcmd`, `pkg_repo_conf_path`) are carried over; OPNsense ignores them. pfSense's NTP pool (`*.pfsense.pool.ntp.org`) is replaced by OPNsense's.
 - **DNS Resolver:** custom options, the Python module (pfBlockerNG DNSBL) and the DNS over TLS service for clients are not converted (warnings are printed).
 - **Remote syslog:** pfSense's per-category selection becomes "all programs" (a warning is printed); the source address is not converted.
 - **Shellcmd** commands other than starting the QEMU guest agent are not converted; use `/usr/local/etc/rc.syshook.d/` scripts.

@@ -19,6 +19,7 @@ use crate::transform::mvc_util::{
 };
 
 const ZABBIX_MODEL: &[&str] = &["OPNsense", "ZabbixAgent"];
+const ZABBIX_PROXY_MODEL: &[&str] = &["OPNsense", "zabbixproxy", "general"];
 const NODE_EXPORTER_MODEL: &[&str] = &["OPNsense", "NodeExporter"];
 const QEMU_MODEL: &[&str] = &["OPNsense", "QemuGuestAgent"];
 
@@ -62,8 +63,20 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
         let name = text(package, "name");
         let internal = text(package, "internal_name");
         let key = format!("{} {}", name, internal).to_ascii_lowercase();
-        if key.contains("zabbix") && key.contains("agent") {
-            let plugin = zabbix_plugin_name(&name, &internal);
+        if key.contains("zabbix") && key.contains("proxy") {
+            let plugin = zabbix_plugin_name(&name, &internal, "proxy");
+            match zabbix_proxy_config(packages) {
+                Some(cfg) if node_at(baseline, ZABBIX_PROXY_MODEL).is_some() => {
+                    convert_zabbix_proxy(out, baseline, cfg, &mut report.warnings);
+                    report.converted.push((plugin, name));
+                }
+                Some(_) => report.missing.push((plugin, name)),
+                None => report.warnings.push(format!(
+                    "{name}: package has no settings; nothing to convert"
+                )),
+            }
+        } else if key.contains("zabbix") && key.contains("agent") {
+            let plugin = zabbix_plugin_name(&name, &internal, "agent");
             match zabbix_config(packages) {
                 Some(cfg) if node_at(baseline, ZABBIX_MODEL).is_some() => {
                     convert_zabbix(out, baseline, cfg, &mut report.warnings);
@@ -112,9 +125,9 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
     report
 }
 
-/// OPNsense ships zabbix-agent as variants `os-zabbix7-agent`,
-/// `os-zabbix74-agent` and `os-zabbix6-agent`.
-fn zabbix_plugin_name(name: &str, internal: &str) -> String {
+/// OPNsense ships zabbix-agent and zabbix-proxy as variants, e.g.
+/// `os-zabbix7-agent`, `os-zabbix74-agent`, `os-zabbix6-proxy`.
+fn zabbix_plugin_name(name: &str, internal: &str, kind: &str) -> String {
     let digits: String = internal
         .chars()
         .chain(" ".chars())
@@ -123,8 +136,95 @@ fn zabbix_plugin_name(name: &str, internal: &str) -> String {
         .take_while(|c| c.is_ascii_digit())
         .collect();
     match digits.as_str() {
-        "6" | "7" | "74" => format!("os-zabbix{digits}-agent"),
-        _ => "os-zabbix7-agent".to_string(),
+        "6" | "7" | "74" => format!("os-zabbix{digits}-{kind}"),
+        _ => format!("os-zabbix7-{kind}"),
+    }
+}
+
+fn zabbix_proxy_config(packages: &XmlNode) -> Option<&XmlNode> {
+    packages
+        .children
+        .iter()
+        .filter(|c| c.tag.starts_with("zabbixproxy"))
+        .find_map(|c| c.get_child("config"))
+}
+
+/// pfSense stores PSK textareas base64-encoded; OPNsense wants the hex key.
+fn decode_psk(raw: &str) -> String {
+    decode_base64(raw)
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_hexdigit()))
+        .unwrap_or_else(|| raw.to_string())
+}
+
+/// Zabbix Proxy package → os-zabbix*-proxy (`OPNsense/zabbixproxy/general`).
+fn convert_zabbix_proxy(
+    out: &mut XmlNode,
+    baseline: &XmlNode,
+    cfg: &XmlNode,
+    warnings: &mut Vec<String>,
+) {
+    let Some(model) = model_mut(out, baseline, ZABBIX_PROXY_MODEL) else {
+        return;
+    };
+    let on = |tag: &str| matches!(text(cfg, tag).as_str(), "on" | "yes" | "1");
+    set_path(model, &["enabled"], bool01(on("proxyenabled")));
+    // Both use ProxyMode semantics: 0 = active, 1 = passive.
+    let passive = text(cfg, "proxymode") == "1";
+    set_path(model, &["proxymode"], bool01(passive));
+    for (pf, opn) in [
+        ("server", "server"),
+        ("serverport", "serverport"),
+        ("hostname", "hostname"),
+        ("listenport", "listenport"),
+        ("listenip", "listenip"),
+        ("sourceip", "sourceip"),
+        ("configfrequency", "configfrequency"),
+        ("starttrappers", "starttrappers"),
+    ] {
+        let value = text(cfg, pf);
+        if !value.is_empty() {
+            set_path(model, &[opn], &value);
+        }
+    }
+
+    // Active proxies connect to the server (TLSConnect), passive ones accept
+    // its connections (TLSAccept); OPNsense picks the directive from the mode.
+    let connect = text(cfg, "tlsconnect");
+    let accept = text(cfg, "tlsaccept");
+    let psk = if passive {
+        accept.split(',').any(|a| a.trim() == "psk")
+    } else {
+        connect == "psk"
+    };
+    set_path(model, &["encryption"], bool01(psk));
+    if psk {
+        set_path(model, &["encryptionidentity"], &text(cfg, "tlspskidentity"));
+        set_path(
+            model,
+            &["encryptionpsk"],
+            &decode_psk(&text(cfg, "tlspskfile")),
+        );
+    }
+    if connect == "cert" || accept.split(',').any(|a| a.trim() == "cert") {
+        warnings.push(
+            "Zabbix proxy: certificate-based TLS is not supported by the OPNsense plugin; not converted"
+                .to_string(),
+        );
+    }
+    let trapper_timeout = text(cfg, "trappertimeout");
+    if !trapper_timeout.is_empty() && trapper_timeout != "300" {
+        warnings.push(format!(
+            "Zabbix proxy: TrapperTimeout {trapper_timeout} not converted (no OPNsense setting)"
+        ));
+    }
+    if on("startsnmptrapper") {
+        warnings.push("Zabbix proxy: SNMP trapper not converted (no OPNsense setting)".to_string());
+    }
+    if !text(cfg, "advancedparams").is_empty() {
+        warnings.push(
+            "Zabbix proxy: advanced parameters not converted (no OPNsense setting)".to_string(),
+        );
     }
 }
 
@@ -193,13 +293,11 @@ fn convert_zabbix(
             &["settings", "features", "encryptionidentity"],
             &text(cfg, "tlspskidentity"),
         );
-        // pfSense stores the PSK textarea base64-encoded.
-        let raw = text(cfg, "tlspskfile");
-        let key = decode_base64(&raw)
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_hexdigit()))
-            .unwrap_or(raw);
-        set_path(model, &["settings", "features", "encryptionpsk"], &key);
+        set_path(
+            model,
+            &["settings", "features", "encryptionpsk"],
+            &decode_psk(&text(cfg, "tlspskfile")),
+        );
     }
     if connect == "cert" || accept.split(',').any(|a| a.trim() == "cert") {
         warnings.push(
@@ -501,5 +599,46 @@ mod tests {
             .iter()
             .any(|w| w.contains("boottime, textfile")));
         assert!(report.warnings.iter().any(|w| w.contains("extra flags")));
+    }
+
+    #[test]
+    fn converts_zabbix_proxy_when_installed() {
+        let source = parse(
+            br#"<pfsense><installedpackages>
+              <package><name>Zabbix Proxy 7</name><internal_name>zabbix-proxy7</internal_name></package>
+              <zabbixproxylts><config><proxyenabled>on</proxyenabled><server>zabbix.example.net</server><serverport>10051</serverport>
+                <hostname>FW Proxy</hostname><listenip>10.0.21.254</listenip><listenport>10051</listenport><proxymode>0</proxymode>
+                <configfrequency>3600</configfrequency><trappertimeout>300</trappertimeout><starttrappers>5</starttrappers>
+                <tlsconnect>psk</tlsconnect><tlsaccept>unencrypted</tlsaccept><tlspskidentity>fw_proxy</tlspskidentity>
+                <tlspskfile>MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=</tlspskfile>
+                <startsnmptrapper>0</startsnmptrapper><advancedparams></advancedparams></config></zabbixproxylts>
+            </installedpackages></pfsense>"#,
+        )
+        .expect("parse");
+        let baseline = parse(
+            br#"<opnsense><OPNsense><zabbixproxy><general version="2.0.4"><enabled>0</enabled><hostname>Zabbix proxy</hostname></general></zabbixproxy></OPNsense></opnsense>"#,
+        )
+        .expect("parse");
+        let mut out = baseline.clone();
+        let report = from_pfsense(&mut out, &source, &baseline);
+
+        assert_eq!(
+            report.converted,
+            vec![("os-zabbix7-proxy".to_string(), "Zabbix Proxy 7".to_string())]
+        );
+        let get = |tag: &str| out.get_text(&["OPNsense", "zabbixproxy", "general", tag]);
+        assert_eq!(get("enabled"), Some("1"));
+        assert_eq!(get("proxymode"), Some("0"));
+        assert_eq!(get("server"), Some("zabbix.example.net"));
+        assert_eq!(get("hostname"), Some("FW Proxy"));
+        assert_eq!(get("listenip"), Some("10.0.21.254"));
+        assert_eq!(get("starttrappers"), Some("5"));
+        assert_eq!(get("encryption"), Some("1"));
+        assert_eq!(get("encryptionidentity"), Some("fw_proxy"));
+        assert_eq!(
+            get("encryptionpsk"),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 }

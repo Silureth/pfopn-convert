@@ -27,21 +27,52 @@ pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, target: &XmlNode) {
         // Always preserve the top-level section for round-trip fidelity.
         upsert_top_level_node("ipsec", out, top);
         if looks_like_pfsense_ipsec(top) {
-            // pfSense phase1/phase2 layout -- translate into OPNsense's
-            // Swanctl connection model and IPsec pre-shared-key store.
-            let (mut mapped_ipsec, mut mapped_swanctl) =
-                ipsec_pf_to_opn::map_pf_ipsec_to_opnsense(top);
             let target_opn = target.get_child("OPNsense");
+            let mut mapping = ipsec_pf_to_opn::map_pf_ipsec_to_opnsense(
+                source,
+                target_opn.and_then(|o| o.get_child("IPsec")),
+                target_opn.and_then(|o| o.get_child("Swanctl")),
+            );
             inherit_model_attrs(
-                &mut mapped_ipsec,
+                &mut mapping.ipsec,
                 target_opn.and_then(|o| o.get_child("IPsec")),
             );
             inherit_model_attrs(
-                &mut mapped_swanctl,
+                &mut mapping.swanctl,
                 target_opn.and_then(|o| o.get_child("Swanctl")),
             );
-            upsert_nested_opnsense_node("IPsec", out, &mapped_ipsec);
-            upsert_nested_opnsense_node("Swanctl", out, &mapped_swanctl);
+            for warning in &mapping.warnings {
+                eprintln!("warning: {warning}");
+            }
+            if !mapping.converted_ikeids.is_empty() {
+                eprintln!(
+                    "info: converted {} IPsec tunnel(s) to OPNsense connections; added {} firewall rule(s) for IKE/NAT-T/ESP from the peers (pfSense added these automatically)",
+                    mapping.converted_ikeids.len(),
+                    mapping.firewall_rules.len()
+                );
+            }
+            upsert_nested_opnsense_node("IPsec", out, &mapping.ipsec);
+            upsert_nested_opnsense_node("Swanctl", out, &mapping.swanctl);
+
+            // Drop converted tunnels from the legacy section, so nothing runs
+            // twice if os-strongswan-legacy is installed later. OPNsense
+            // stops strongSwan unless <ipsec><enable> is set.
+            let mut legacy = top.clone();
+            legacy.children.retain(|c| match c.tag.as_str() {
+                "phase1" | "phase2" => {
+                    let ikeid = c.get_text(&["ikeid"]).map(str::trim).unwrap_or("");
+                    !mapping.converted_ikeids.iter().any(|id| id == ikeid)
+                }
+                "enable" => false,
+                _ => true,
+            });
+            if mapping.any_enabled || top.get_child("enable").is_some() {
+                let mut enable = XmlNode::new("enable");
+                enable.text = Some("1".to_string());
+                legacy.children.insert(0, enable);
+            }
+            upsert_top_level_node("ipsec", out, &legacy);
+            prepend_filter_rules(out, mapping.firewall_rules);
         } else if looks_like_opnsense_ipsec(top) {
             // Already OPNsense-style (general/charon) -- nest it directly.
             upsert_nested_opnsense_node("IPsec", out, top);
@@ -112,6 +143,29 @@ pub fn to_pfsense(out: &mut XmlNode, source: &XmlNode, target: &XmlNode) {
     }
 
     let _ = target;
+}
+
+/// Insert pfSense-format rules ahead of the existing filter rules (pfSense
+/// evaluated its automatic IPsec rules before the user's rules).
+fn prepend_filter_rules(out: &mut XmlNode, rules: Vec<XmlNode>) {
+    if rules.is_empty() {
+        return;
+    }
+    let filter = match out.children.iter().position(|c| c.tag == "filter") {
+        Some(idx) => &mut out.children[idx],
+        None => {
+            out.children.push(XmlNode::new("filter"));
+            out.children.last_mut().expect("just pushed")
+        }
+    };
+    let pos = filter
+        .children
+        .iter()
+        .position(|c| c.tag == "rule")
+        .unwrap_or(filter.children.len());
+    for (offset, rule) in rules.into_iter().enumerate() {
+        filter.children.insert(pos + offset, rule);
+    }
 }
 
 /// Replace or append a top-level child section in the output root.
@@ -206,7 +260,11 @@ mod tests {
         let mut out = target.clone();
 
         to_opnsense(&mut out, &source, &target);
-        assert_eq!(out.get_text(&["ipsec", "phase1", "descr"]), Some("src-p1"));
+        // Converted: no legacy copy left (it would run twice with os-strongswan-legacy).
+        assert!(out
+            .get_child("ipsec")
+            .and_then(|i| i.get_child("phase1"))
+            .is_none());
         assert_eq!(
             out.get_text(&[
                 "OPNsense",
@@ -261,66 +319,203 @@ mod tests {
     #[test]
     fn maps_pfsense_phase1_phase2_into_opnsense_swanctl() {
         let source = parse(
-            br#"<pfsense><ipsec>
+            br#"<pfsense>
+              <interfaces>
+                <wan><if>vtnet0</if><ipaddr>203.0.113.20</ipaddr><subnet>27</subnet></wan>
+                <lan><if>vtnet1</if><ipaddr>10.90.0.254</ipaddr><subnet>24</subnet></lan>
+              </interfaces>
+              <ipsec>
                 <phase1>
-                  <ikeid>1</ikeid>
+                  <ikeid>1</ikeid><iketype>ikev2</iketype><interface>wan</interface><protocol>inet</protocol>
                   <remote-gateway>198.51.100.10</remote-gateway>
                   <authentication_method>pre_shared_key</authentication_method>
                   <pre-shared-key>secret</pre-shared-key>
-                  <myid_type>myaddress</myid_type>
-                  <peerid_type>peeraddress</peerid_type>
-                  <descr>Watford</descr>
-                  <nat_traversal>on</nat_traversal>
-                  <mobike>off</mobike>
-                  <dpd_delay>10</dpd_delay>
-                  <dpd_maxfail>5</dpd_maxfail>
-                  <startaction>none</startaction>
+                  <myid_type>myaddress</myid_type><peerid_type>peeraddress</peerid_type>
+                  <encryption>
+                    <item><encryption-algorithm><name>aes</name><keylen>256</keylen></encryption-algorithm><hash-algorithm>sha256</hash-algorithm><prf-algorithm>sha1</prf-algorithm><dhgroup>14</dhgroup></item>
+                    <item><encryption-algorithm><name>aes256gcm</name><keylen>128</keylen></encryption-algorithm><hash-algorithm>sha256</hash-algorithm><prf-algorithm>sha1</prf-algorithm><dhgroup>14</dhgroup></item>
+                  </encryption>
+                  <lifetime>86400</lifetime><rekey_time></rekey_time><reauth_time></reauth_time>
+                  <descr>Branch</descr>
+                  <nat_traversal>on</nat_traversal><mobike>off</mobike>
+                  <dpd_delay>10</dpd_delay><dpd_maxfail>5</dpd_maxfail>
+                  <startaction></startaction><closeaction>start</closeaction>
                 </phase1>
                 <phase2>
-                  <ikeid>1</ikeid>
-                  <mode>tunnel</mode>
-                  <reqid>1</reqid>
+                  <ikeid>1</ikeid><mode>tunnel</mode><reqid>1</reqid><protocol>esp</protocol>
                   <localid><type>lan</type></localid>
                   <remoteid><type>network</type><address>192.168.10.0</address><netbits>24</netbits></remoteid>
-                  <lifetime>3600</lifetime>
+                  <encryption-algorithm-option><name>aes256gcm</name><keylen>auto</keylen></encryption-algorithm-option>
+                  <hash-algorithm-option>hmac_sha256</hash-algorithm-option>
+                  <pfsgroup>14</pfsgroup><lifetime>3600</lifetime>
                 </phase2>
-              </ipsec></pfsense>"#,
+                <phase2>
+                  <ikeid>1</ikeid><mode>tunnel</mode><reqid>2</reqid><protocol>esp</protocol>
+                  <localid><type>lan</type></localid>
+                  <remoteid><type>network</type><address>192.168.11.0</address><netbits>24</netbits></remoteid>
+                  <encryption-algorithm-option><name>aes256gcm</name><keylen>auto</keylen></encryption-algorithm-option>
+                  <pfsgroup>14</pfsgroup><lifetime>3600</lifetime>
+                </phase2>
+                <vtimaps/>
+              </ipsec>
+              <filter><rule><type>pass</type><interface>wan</interface><descr>user rule</descr></rule></filter>
+            </pfsense>"#,
         )
         .expect("source parse");
-        let target = parse(br#"<opnsense><system/></opnsense>"#).expect("target parse");
+        let target = parse(br#"<opnsense><filter><rule><type>pass</type><interface>wan</interface><descr>user rule</descr></rule></filter></opnsense>"#)
+            .expect("target parse");
         let mut out = target.clone();
 
         to_opnsense(&mut out, &source, &target);
+        let conn = |tag: &str| {
+            out.get_text(&["OPNsense", "Swanctl", "Connections", "Connection", tag])
+                .map(str::to_string)
+        };
+        assert_eq!(conn("remote_addrs").as_deref(), Some("198.51.100.10"));
+        assert_eq!(conn("local_addrs").as_deref(), Some("203.0.113.20"));
+        assert_eq!(conn("version").as_deref(), Some("2"));
         assert_eq!(
-            out.get_text(&[
-                "OPNsense",
-                "Swanctl",
-                "Connections",
-                "Connection",
-                "remote_addrs"
-            ]),
+            conn("proposals").as_deref(),
+            Some("aes256-sha256-modp2048,aes256gcm16-sha256-modp2048")
+        );
+        assert_eq!(conn("pools").as_deref(), Some(""));
+        assert_eq!(conn("unique").as_deref(), Some("replace"));
+        // pfSense: rekey = 90% of lifetime, no reauth on IKEv2, over = rest
+        assert_eq!(conn("rekey_time").as_deref(), Some("77760"));
+        assert_eq!(conn("reauth_time").as_deref(), Some("0"));
+        assert_eq!(conn("over_time").as_deref(), Some("8640"));
+        assert_eq!(conn("dpd_delay").as_deref(), Some("10"));
+        assert_eq!(conn("dpd_timeout").as_deref(), Some(""));
+        assert_eq!(conn("encap").as_deref(), Some("0"));
+        assert_eq!(conn("description").as_deref(), Some("Branch"));
+
+        // IKEv2: both phase 2 entries merged into one child, as pfSense does.
+        let children = out
+            .get_child("OPNsense")
+            .and_then(|o| o.get_child("Swanctl"))
+            .and_then(|s| s.get_child("children"))
+            .map(|c| c.get_children("child").len());
+        assert_eq!(children, Some(1));
+        let child = |tag: &str| {
+            out.get_text(&["OPNsense", "Swanctl", "children", "child", tag])
+                .map(str::to_string)
+        };
+        assert_eq!(child("local_ts").as_deref(), Some("10.90.0.0/24"));
+        assert_eq!(
+            child("remote_ts").as_deref(),
+            Some("192.168.10.0/24,192.168.11.0/24")
+        );
+        assert_eq!(
+            child("esp_proposals").as_deref(),
+            Some("aes256gcm16-modp2048")
+        );
+        assert_eq!(child("reqid").as_deref(), Some("1"));
+        assert_eq!(child("rekey_time").as_deref(), Some("3240"));
+        assert_eq!(child("start_action").as_deref(), Some("trap"));
+        assert_eq!(child("close_action").as_deref(), Some("start"));
+        assert_eq!(child("dpd_action").as_deref(), Some("start"));
+
+        // IDs and the pre-shared key, keyed on the peer like OPNsense's legacy code.
+        assert_eq!(
+            out.get_text(&["OPNsense", "Swanctl", "locals", "local", "id"]),
+            Some("203.0.113.20")
+        );
+        assert_eq!(
+            out.get_text(&["OPNsense", "Swanctl", "remotes", "remote", "id"]),
             Some("198.51.100.10")
-        );
-        assert_eq!(
-            out.get_text(&["OPNsense", "Swanctl", "children", "child", "remote_ts"]),
-            Some("192.168.10.0/24")
-        );
-        assert_eq!(
-            out.get_text(&["OPNsense", "Swanctl", "children", "child", "local_ts"]),
-            Some("")
         );
         assert_eq!(
             out.get_text(&["OPNsense", "IPsec", "preSharedKeys", "preSharedKey", "Key"]),
             Some("secret")
         );
         assert_eq!(
-            out.get_text(&["OPNsense", "Swanctl", "locals", "local", "id"]),
-            Some("")
+            out.get_text(&[
+                "OPNsense",
+                "IPsec",
+                "preSharedKeys",
+                "preSharedKey",
+                "ident"
+            ]),
+            Some("198.51.100.10")
+        );
+
+        // Legacy section: tunnels removed, IPsec enabled, other entries kept.
+        let legacy = out.get_child("ipsec").expect("ipsec");
+        assert_eq!(legacy.get_text(&["enable"]), Some("1"));
+        assert!(legacy.get_child("phase1").is_none());
+        assert!(legacy.get_child("phase2").is_none());
+        assert!(legacy.get_child("vtimaps").is_some());
+
+        // IKE, NAT-T and ESP from the peer, ahead of the user's rules.
+        let descrs: Vec<String> = out
+            .get_child("filter")
+            .expect("filter")
+            .get_children("rule")
+            .iter()
+            .map(|r| r.get_text(&["descr"]).unwrap_or("").to_string())
+            .collect();
+        assert_eq!(
+            descrs,
+            vec![
+                "IPsec: Branch (IKE)",
+                "IPsec: Branch (NAT-T)",
+                "IPsec: Branch (ESP)",
+                "user rule"
+            ]
         );
         assert_eq!(
-            out.get_text(&["OPNsense", "Swanctl", "remotes", "remote", "id"]),
-            Some("")
+            out.get_child("filter").unwrap().get_children("rule")[0]
+                .get_text(&["source", "address"]),
+            Some("198.51.100.10")
         );
+    }
+
+    #[test]
+    fn ikev1_gets_one_child_per_phase2_and_no_auto_rules_when_disabled() {
+        let source = parse(
+            br#"<pfsense>
+              <system><disablevpnrules/></system>
+              <ipsec>
+                <phase1><ikeid>7</ikeid><iketype>ikev1</iketype><remote-gateway>198.51.100.30</remote-gateway>
+                  <authentication_method>pre_shared_key</authentication_method><pre-shared-key>k</pre-shared-key>
+                  <lifetime>28800</lifetime><dpd_delay>10</dpd_delay><dpd_maxfail>5</dpd_maxfail>
+                  <myid_type>fqdn</myid_type><myid_data>fw.example.net</myid_data>
+                  <peerid_type>keyid tag</peerid_type><peerid_data>peer1</peerid_data></phase1>
+                <phase2><ikeid>7</ikeid><mode>tunnel</mode><reqid>3</reqid><localid><type>network</type><address>10.1.0.0</address><netbits>24</netbits></localid><remoteid><type>network</type><address>10.2.0.0</address><netbits>24</netbits></remoteid></phase2>
+                <phase2><ikeid>7</ikeid><mode>tunnel</mode><reqid>4</reqid><localid><type>network</type><address>10.1.0.0</address><netbits>24</netbits></localid><remoteid><type>network</type><address>10.3.0.0</address><netbits>24</netbits></remoteid></phase2>
+              </ipsec></pfsense>"#,
+        )
+        .expect("source parse");
+        let target = parse(br#"<opnsense/>"#).expect("target parse");
+        let mut out = target.clone();
+        to_opnsense(&mut out, &source, &target);
+
+        let swanctl = out
+            .get_child("OPNsense")
+            .and_then(|o| o.get_child("Swanctl"))
+            .expect("swanctl");
+        let children = swanctl.get_child("children").unwrap().get_children("child");
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[1].get_text(&["remote_ts"]), Some("10.3.0.0/24"));
+        assert_eq!(children[1].get_text(&["reqid"]), Some("4"));
+        let conn = swanctl
+            .get_child("Connections")
+            .unwrap()
+            .get_child("Connection")
+            .unwrap();
+        assert_eq!(conn.get_text(&["version"]), Some("1"));
+        // IKEv1: reauth at 90%, DPD timeout = delay * (maxfail + 1)
+        assert_eq!(conn.get_text(&["reauth_time"]), Some("25920"));
+        assert_eq!(conn.get_text(&["dpd_timeout"]), Some("60"));
+        assert_eq!(
+            swanctl.get_text(&["locals", "local", "id"]),
+            Some("fqdn:fw.example.net")
+        );
+        assert_eq!(
+            swanctl.get_text(&["remotes", "remote", "id"]),
+            Some("keyid:peer1")
+        );
+        assert!(out.get_child("filter").is_none());
     }
 
     #[test]

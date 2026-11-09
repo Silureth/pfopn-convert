@@ -1,4 +1,5 @@
 pub mod aliases;
+pub mod auth_servers;
 pub mod bridges;
 pub mod certs;
 pub mod device_refs;

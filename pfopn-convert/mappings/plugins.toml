@@ -16,7 +16,7 @@ note = "Supported on both platforms."
 
 [[plugin]]
 id = "openvpn"
-pfsense_markers = ["openvpn", "ovpnserver", "openvpn-client-export"]
+pfsense_markers = ["openvpn", "ovpnserver", "openvpn-client-export", "openvpn client export utility"]
 opnsense_markers = ["openvpn", "os-openvpn-legacy"]
 compatible_targets = ["pfsense", "opnsense"]
 status = "supported"
@@ -69,6 +69,14 @@ opnsense_markers = ["os-zabbix7-agent", "os-zabbix74-agent", "os-zabbix6-agent"]
 compatible_targets = ["pfsense", "opnsense"]
 status = "partial"
 note = "Settings, PSK encryption and user parameters are converted when the plugin is in the baseline; certificate TLS is not."
+
+[[plugin]]
+id = "zabbix-proxy"
+pfsense_markers = ["zabbix proxy 7", "zabbix proxy 6", "zabbix proxy lts", "zabbix-proxy7", "zabbix-proxy6", "zabbix-proxy-lts"]
+opnsense_markers = ["os-zabbix7-proxy", "os-zabbix74-proxy", "os-zabbix6-proxy"]
+compatible_targets = ["pfsense", "opnsense"]
+status = "partial"
+note = "Mode, server, listen settings and PSK encryption are converted when the plugin is in the baseline; TrapperTimeout, SNMP trapper, advanced parameters and certificate TLS are not."
 
 [[plugin]]
 id = "node_exporter"

@@ -38,58 +38,18 @@ use xml_diff_core::XmlNode;
 
 mod base;
 mod mapper;
+mod proposals;
 mod util;
 
-/// Convert pfSense IPsec configuration to OPNsense IPsec and Swanctl format.
-///
-/// Returns a tuple of `(IPsec, Swanctl)` XML nodes:
-/// - The first node contains OPNsense IPsec settings (general config, pre-shared keys)
-/// - The second node contains OPNsense Swanctl config (connections, locals, remotes, children)
-///
-/// Both nodes should be inserted into the output tree under `<OPNsense>`.
-///
-/// # Example structure
-///
-/// Input (pfSense):
-/// ```xml
-/// <ipsec>
-///   <phase1>
-///     <ikeid>1</ikeid>
-///     <remote-gateway>198.51.100.10</remote-gateway>
-///     <authentication_method>pre_shared_key</authentication_method>
-///     <pre-shared-key>secret</pre-shared-key>
-///   </phase1>
-///   <phase2>
-///     <ikeid>1</ikeid>
-///     <mode>tunnel</mode>
-///     <localid><type>network</type><address>192.168.1.0</address><netbits>24</netbits></localid>
-///   </phase2>
-/// </ipsec>
-/// ```
-///
-/// Output (OPNsense):
-/// ```xml
-/// <OPNsense>
-///   <IPsec>
-///     <general>...</general>
-///     <preSharedKeys>
-///       <preSharedKey uuid="...">
-///         <Key>secret</Key>
-///       </preSharedKey>
-///     </preSharedKeys>
-///   </IPsec>
-///   <Swanctl>
-///     <Connections>
-///       <Connection uuid="...">
-///         <remote_addrs>198.51.100.10</remote_addrs>
-///       </Connection>
-///     </Connections>
-///     <locals><local uuid="...">...</local></locals>
-///     <remotes><remote uuid="...">...</remote></remotes>
-///     <children><child uuid="...">...</child></children>
-///   </Swanctl>
-/// </OPNsense>
-/// ```
-pub fn map_pf_ipsec_to_opnsense(source_ipsec: &XmlNode) -> (XmlNode, XmlNode) {
-    mapper::map_pf_ipsec_to_opnsense(source_ipsec)
+pub use mapper::IpsecMapping;
+
+/// Convert pfSense IPsec tunnels (`<ipsec><phase1>/<phase2>` in `source`) to
+/// OPNsense's IPsec/Swanctl model, starting from the baseline's sections.
+/// See [`mapper::map_pf_ipsec_to_opnsense`].
+pub fn map_pf_ipsec_to_opnsense(
+    source: &XmlNode,
+    baseline_ipsec: Option<&XmlNode>,
+    baseline_swanctl: Option<&XmlNode>,
+) -> IpsecMapping {
+    mapper::map_pf_ipsec_to_opnsense(source, baseline_ipsec, baseline_swanctl)
 }

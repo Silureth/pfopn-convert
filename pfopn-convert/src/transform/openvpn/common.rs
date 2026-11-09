@@ -35,24 +35,6 @@ pub(super) fn source_pfsense_servers(source: &XmlNode) -> Option<XmlNode> {
     None
 }
 
-/// Check if a pfSense OpenVPN config originated from OPNsense.
-///
-/// Detects round-trip conversions by checking for `<opnsense_instance_uuid>`
-/// markers in the server configurations. These markers are added when converting
-/// from OPNsense to pfSense to enable lossless round-trip conversion.
-///
-/// Returns `true` if ALL servers have UUID markers, indicating this config
-/// came from OPNsense and should be handled specially to avoid duplication.
-pub(super) fn is_opnsense_origin_openvpn(openvpn: &XmlNode) -> bool {
-    let servers = openvpn.get_children("openvpn-server");
-    if servers.is_empty() {
-        return false;
-    }
-    servers
-        .into_iter()
-        .all(|s| s.get_text(&["opnsense_instance_uuid"]).is_some())
-}
-
 /// Get or create a mutable reference to a child node by tag name.
 ///
 /// If the child exists, returns a reference to it. Otherwise, creates a new
@@ -112,23 +94,6 @@ pub(super) fn dedupe_top_level_openvpn(out: &mut XmlNode) {
         }
         false
     });
-}
-
-/// Extract an OPNsense instance template from the target configuration.
-///
-/// When converting pfSense to OPNsense, we use the target's existing instance
-/// structure as a template to ensure we create instances with the correct
-/// default fields and structure.
-///
-/// Returns the first `<Instance>` found in the target's OpenVPN configuration,
-/// or `None` if no template exists.
-pub(super) fn opnsense_instance_template(target: &XmlNode) -> Option<XmlNode> {
-    target
-        .get_child("OPNsense")
-        .and_then(|n| n.get_child("OpenVPN"))
-        .and_then(|n| n.get_child("Instances"))
-        .and_then(|n| n.get_child("Instance"))
-        .cloned()
 }
 
 /// Extract all assigned OpenVPN server unit numbers from interface assignments.

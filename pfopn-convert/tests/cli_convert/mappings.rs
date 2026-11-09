@@ -320,7 +320,7 @@ fn convert_maps_pfsense_ipsec_into_opnsense_nested_ipsec() {
     assert!(out.contains("<ipsec>"));
     assert!(out.contains("<OPNsense>"));
     assert!(out.contains("<IPsec>"));
-    assert!(out.contains("<descr>site-a</descr>"));
+    assert!(out.contains("<description>site-a</description>"));
 }
 
 #[test]

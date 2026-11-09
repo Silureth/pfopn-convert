@@ -22,20 +22,19 @@
 //! - More structured with nested containers
 //! - Interface references also use "ovpnsN" naming
 //!
+//! ## pfSense → OPNsense
+//!
+//! OPNsense 26.7 only runs legacy `<openvpn-server>`/`<openvpn-client>`
+//! entries when the os-openvpn-legacy plugin is installed. Servers and
+//! client-specific overrides are therefore converted into the OPNsense model
+//! (`Instances`, `StaticKeys`, `Overwrites`; see `pf_to_opn`), and removed from
+//! the legacy `<openvpn>` section so nothing runs twice. What cannot be
+//! converted (clients, shared-key servers) stays there, with a warning.
+//!
 //! ## Round-Trip Preservation
 //!
-//! To support lossless pfSense → OPNsense → pfSense conversions:
-//! - When converting from OPNsense to pfSense, the original pfSense config
-//!   is detected via `<opnsense_instance_uuid>` markers
-//! - The UUID linking allows proper restoration of the original structure
-//! - This preserves pfSense-specific fields that don't exist in OPNsense's model
-//!
-//! ## Dual-Format Support
-//!
-//! OPNsense outputs maintain BOTH formats:
-//! - Native OPNsense format at `<OPNsense><OpenVPN><Instances>`
-//! - Compatible pfSense format at `<openvpn>` (for tools expecting it)
-//! - Deduplication ensures only one `<openvpn>` element exists
+//! OPNsense → pfSense conversions store each instance's UUID in
+//! `<opnsense_instance_uuid>`, which is reused when converting back.
 
 use xml_diff_core::XmlNode;
 
@@ -48,53 +47,82 @@ mod tests;
 
 /// Convert OpenVPN configuration to OPNsense format.
 ///
-/// Handles two input cases:
-/// 1. Source already has OPNsense nested OpenVPN config → use it directly
-/// 2. Source has pfSense OpenVPN config → map servers/clients to instances
-///
-/// The output contains:
-/// - OPNsense native format: `<OPNsense><OpenVPN><Instances>`
-/// - pfSense compatibility format: `<openvpn>` (normalized or preserved)
-///
-/// ## Round-Trip Detection
-///
-/// If the source pfSense config contains `<opnsense_instance_uuid>` markers
-/// (from a previous OPNsense → pfSense → OPNsense conversion), the top-level
-/// `<openvpn>` is normalized to avoid duplication with the nested structure.
-///
-/// # Arguments
-///
-/// * `out` - The output XML tree being constructed
-/// * `source` - The source configuration (pfSense or OPNsense)
-/// * `target` - The target template (used for default instance structure)
-pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, target: &XmlNode) {
-    // Get OPNsense instances — either from source if already OPNsense format,
-    // or by mapping pfSense servers/clients to instances
-    let instances = common::source_opnsense_instances(source)
-        .unwrap_or_else(|| pf_to_opn::map_pfsense_servers_to_opnsense_instances(source, target));
-    if instances.children.is_empty() {
+/// - Source already in OPNsense's model (`<OPNsense><OpenVPN><Instances>`):
+///   copied as-is; the legacy `<openvpn>` section is emptied.
+/// - pfSense source: servers and client-specific overrides are mapped onto
+///   OPNsense's model (see [`pf_to_opn::map_pfsense_openvpn`]); converted
+///   entries are removed from the legacy `<openvpn>` section, the rest
+///   (clients, shared-key servers) stays there. Warnings are printed for
+///   settings that could not be converted.
+pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, _target: &XmlNode) {
+    // Source already in OPNsense's model (round trip): use its instances as-is.
+    if let Some(instances) = common::source_opnsense_instances(source) {
+        if instances.children.is_empty() {
+            return;
+        }
+        let opn = common::ensure_child_mut(out, "OPNsense");
+        let openvpn = common::ensure_child_mut(opn, "OpenVPN");
+        common::upsert_child(openvpn, instances);
+        common::normalize_top_level_openvpn_for_opnsense(out);
+        common::dedupe_top_level_openvpn(out);
         return;
     }
 
-    // Insert instances into the OPNsense nested structure
+    let mapping = pf_to_opn::map_pfsense_openvpn(source);
+    for warning in &mapping.warnings {
+        eprintln!("warning: {warning}");
+    }
+    if mapping.instances.children.is_empty() && mapping.overwrites.is_empty() {
+        if let Some(legacy) = common::source_pfsense_servers(source) {
+            // Nothing convertible (e.g. only clients): keep the legacy section.
+            common::upsert_child(out, legacy);
+            common::dedupe_top_level_openvpn(out);
+        }
+        return;
+    }
+    eprintln!(
+        "info: converted {} OpenVPN server(s) to OPNsense instances ({} TLS key(s), {} client override(s))",
+        mapping.instances.children.len(),
+        mapping.static_keys.len(),
+        mapping.overwrites.len()
+    );
+
     let opn = common::ensure_child_mut(out, "OPNsense");
     let openvpn = common::ensure_child_mut(opn, "OpenVPN");
-    common::upsert_child(openvpn, instances);
-
-    // Handle top-level <openvpn> for pfSense compatibility
-    if let Some(source_pf_openvpn) = common::source_pfsense_servers(source) {
-        // If this came from OPNsense originally (has UUID markers), normalize it
-        // Otherwise, preserve the pfSense structure as-is
-        if !common::is_opnsense_origin_openvpn(&source_pf_openvpn) {
-            common::upsert_child(out, source_pf_openvpn);
-        } else {
-            common::normalize_top_level_openvpn_for_opnsense(out);
-        }
-    } else {
-        // No pfSense OpenVPN config found, create empty element for compatibility
-        common::normalize_top_level_openvpn_for_opnsense(out);
+    if !mapping.instances.children.is_empty() {
+        common::upsert_child(openvpn, mapping.instances.clone());
     }
-    // Ensure only one <openvpn> element exists
+    for (container, items) in [
+        ("StaticKeys", mapping.static_keys.clone()),
+        ("Overwrites", mapping.overwrites.clone()),
+    ] {
+        if items.is_empty() {
+            continue;
+        }
+        let node = common::ensure_child_mut(openvpn, container);
+        for item in items {
+            let uuid = item.attributes.get("uuid").cloned();
+            node.children
+                .retain(|c| uuid.is_none() || c.attributes.get("uuid") != uuid.as_ref());
+            node.children.push(item);
+        }
+    }
+
+    // Keep only what was not converted in the legacy <openvpn> section, so
+    // nothing runs twice if the os-openvpn-legacy plugin is installed later.
+    let mut legacy = source
+        .get_child("openvpn")
+        .cloned()
+        .unwrap_or_else(|| XmlNode::new("openvpn"));
+    legacy.children.retain(|c| match c.tag.as_str() {
+        "openvpn-server" => {
+            let vpnid = c.get_text(&["vpnid"]).map(str::trim).unwrap_or("1");
+            !mapping.converted_vpnids.iter().any(|v| v == vpnid)
+        }
+        "openvpn-csc" => !mapping.csc_converted,
+        _ => true,
+    });
+    common::upsert_child(out, legacy);
     common::dedupe_top_level_openvpn(out);
 }
 
