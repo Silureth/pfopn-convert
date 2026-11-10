@@ -39,8 +39,11 @@
 use xml_diff_core::XmlNode;
 
 mod common;
+mod nat;
 mod opn_to_pf;
 mod pf_to_opn;
+
+pub use nat::outbound_nat_for_tunnels;
 
 #[cfg(test)]
 mod tests;

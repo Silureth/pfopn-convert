@@ -10,6 +10,7 @@ VPN conversions, checked against pfSense 2.7's and OPNsense 26.7.8's code. OPNse
 - Client-specific overrides are converted as OPNsense's own migration does.
 - Fields OPNsense's model does not have (custom options, NetBIOS) are no longer written; they are reported instead. `register-dns` is no longer pushed twice.
 - Clients and shared-key servers are not converted (warning; they stay in the legacy section).
+- Outbound NAT rules are added for each server's tunnel network on every gateway interface, as pfSense's automatic outbound NAT did; OPNsense's automatic rules only cover legacy servers. Automatic mode becomes hybrid; manual mode is left alone.
 
 ### IPsec
 
@@ -24,6 +25,7 @@ VPN conversions, checked against pfSense 2.7's and OPNsense 26.7.8's code. OPNse
 
 - Zabbix Proxy 6/7 → `os-zabbix6-proxy` / `os-zabbix7-proxy`.
 - LDAP servers: pfSense's "STARTTLS Encrypt" is mapped to OPNsense's StartTLS (it became LDAPS); a disabled extended query is cleared.
+- Port forwards with pfSense's "NAT + proxy" reflection are set to pure NAT (OPNsense's model only offers that), and "Automatic outbound NAT for Reflection" is switched on when an active rule used proxy mode, so clients in the target's own subnet keep working.
 - `scan` knows Zabbix Proxy and the OpenVPN Client Export package.
 
 ## v0.2.0 (2026-11-06)

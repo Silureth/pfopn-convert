@@ -49,7 +49,7 @@ use pfopn_convert::detect::{detect_config, ConfigFlavor};
 use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     auth_servers, bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
-    interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, opn_plugins,
+    interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, openvpn, opn_plugins,
     opnsense_assignments, pfblocker, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames, wireguard,
 };
 
@@ -225,6 +225,33 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
         }
         for dropped in &gw.dropped_fields {
             eprintln!("warning: {dropped}");
+        }
+        if from == "pfsense" {
+            // Before filter_mvc, which moves outbound rules into the rule model.
+            let ovpn_nat = openvpn::outbound_nat_for_tunnels(&mut out);
+            if !ovpn_nat.added.is_empty() {
+                eprintln!(
+                    "info: added outbound NAT for OpenVPN tunnel network(s) as pfSense's automatic rules did ({}){}",
+                    ovpn_nat.added.join(", "),
+                    if ovpn_nat.switched_to_hybrid {
+                        "; outbound NAT mode set to hybrid"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            let reflection = nat_mvc::port_forward_reflection_for_pfsense_source(&mut out);
+            if reflection.rewritten > 0 {
+                eprintln!(
+                    "info: {} port forward(s) used pfSense's NAT + proxy reflection; set to pure NAT (OPNsense has no proxy mode)",
+                    reflection.rewritten
+                );
+            }
+            if reflection.helper_enabled {
+                eprintln!(
+                    "info: enabled \"Automatic outbound NAT for Reflection\" so reflected port forwards keep working for clients in the target's own subnet, as pfSense's proxy mode did"
+                );
+            }
         }
         let nat = nat_mvc::move_legacy_nat_to_mvc(&mut out, &target);
         if nat.onetoone_moved + nat.npt_moved > 0 {

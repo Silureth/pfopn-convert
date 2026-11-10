@@ -91,6 +91,68 @@ pub fn move_legacy_nat_to_mvc(out: &mut XmlNode, baseline: &XmlNode) -> NatMvcSt
     stats
 }
 
+/// Outcome of [`port_forward_reflection_for_pfsense_source`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ReflectionStats {
+    /// Port forwards whose `natreflection` was `enable` (rewritten to `purenat`).
+    pub rewritten: usize,
+    /// "Automatic outbound NAT for Reflection" was switched on.
+    pub helper_enabled: bool,
+}
+
+/// Port-forward NAT reflection from pfSense.
+///
+/// pfSense's per-rule `natreflection=enable` means "NAT + proxy"
+/// (`filter.inc`: `$reflection_type = "proxy"`); a rule without a value uses
+/// proxy mode too when reflection is on globally and
+/// `enablenatreflectionpurenat` is not set. The proxy connects to the target
+/// from the firewall, so it also works for clients in the target's own
+/// subnet.
+///
+/// OPNsense 26.7 port forwards (`DNat` model, mounted on `nat/rule`) only
+/// offer `purenat` and `disable`, and pure NAT needs "Automatic outbound NAT
+/// for Reflection" (`system/enablenatreflectionhelper`) for same-subnet
+/// clients. `enable` is rewritten to `purenat` (the runtime treats both the
+/// same, the GUI only knows `purenat`), and the helper is switched on when an
+/// active rule used proxy mode.
+pub fn port_forward_reflection_for_pfsense_source(out: &mut XmlNode) -> ReflectionStats {
+    let mut stats = ReflectionStats::default();
+    let system = out.get_child("system");
+    let flag_set = |tag: &str| system.map(|s| s.get_child(tag).is_some()).unwrap_or(false);
+    let global_proxy = !flag_set("disablenatreflection") && !flag_set("enablenatreflectionpurenat");
+    let helper_set = system
+        .and_then(|s| s.get_text(&["enablenatreflectionhelper"]))
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    let mut proxy_used = false;
+    if let Some(nat) = out.children.iter_mut().find(|c| c.tag == "nat") {
+        for rule in nat.children.iter_mut().filter(|c| c.tag == "rule") {
+            let reflection = text(rule, "natreflection");
+            let active = !pf_flag_is_set(rule, "disabled") && !pf_flag_is_set(rule, "nordr");
+            if active && (reflection == "enable" || (reflection.is_empty() && global_proxy)) {
+                proxy_used = true;
+            }
+            if reflection == "enable" {
+                if let Some(child) = rule.children.iter_mut().find(|c| c.tag == "natreflection") {
+                    child.text = Some("purenat".to_string());
+                }
+                stats.rewritten += 1;
+            }
+        }
+    }
+
+    if proxy_used && !helper_set {
+        let system = ensure_path(out, &["system"]);
+        system
+            .children
+            .retain(|c| c.tag != "enablenatreflectionhelper");
+        push(system, "enablenatreflectionhelper", "yes");
+        stats.helper_enabled = true;
+    }
+    stats
+}
+
 /// Map one pfSense/legacy `<onetoone>` entry (see `MFP1_0_4.php`).
 fn onetoone_rule(legacy: &XmlNode) -> Result<XmlNode, String> {
     let source = address_of(legacy.get_child("source"))
@@ -337,7 +399,56 @@ fn stable_uuid(seed: &str) -> String {
 mod tests {
     use xml_diff_core::parse;
 
-    use super::move_legacy_nat_to_mvc;
+    use super::{move_legacy_nat_to_mvc, port_forward_reflection_for_pfsense_source};
+
+    #[test]
+    fn proxy_reflection_becomes_purenat_with_helper() {
+        let mut out = parse(
+            br#"<opnsense><system><disablenatreflection>yes</disablenatreflection></system><nat>
+                <rule><interface>wan</interface><natreflection>enable</natreflection></rule>
+                <rule><interface>wan</interface><natreflection>purenat</natreflection></rule>
+                <rule><interface>wan</interface></rule>
+            </nat></opnsense>"#,
+        )
+        .expect("parse");
+        let stats = port_forward_reflection_for_pfsense_source(&mut out);
+        assert_eq!(stats.rewritten, 1);
+        assert!(stats.helper_enabled);
+        let rules = out.get_child("nat").unwrap().get_children("rule");
+        assert_eq!(rules[0].get_text(&["natreflection"]), Some("purenat"));
+        assert_eq!(rules[1].get_text(&["natreflection"]), Some("purenat"));
+        assert_eq!(
+            out.get_text(&["system", "enablenatreflectionhelper"]),
+            Some("yes")
+        );
+    }
+
+    #[test]
+    fn no_helper_without_active_proxy_reflection() {
+        // Reflection off globally; the only "enable" rule is disabled.
+        let mut out = parse(
+            br#"<opnsense><system><disablenatreflection>yes</disablenatreflection></system><nat>
+                <rule><disabled>1</disabled><natreflection>enable</natreflection></rule>
+                <rule><interface>wan</interface></rule>
+            </nat></opnsense>"#,
+        )
+        .expect("parse");
+        let stats = port_forward_reflection_for_pfsense_source(&mut out);
+        assert_eq!(stats.rewritten, 1);
+        assert!(!stats.helper_enabled);
+        assert!(out
+            .get_child("system")
+            .unwrap()
+            .get_child("enablenatreflectionhelper")
+            .is_none());
+
+        // Reflection on globally in pfSense's default (proxy) mode.
+        let mut out = parse(
+            br#"<opnsense><system/><nat><rule><interface>wan</interface></rule></nat></opnsense>"#,
+        )
+        .expect("parse");
+        assert!(port_forward_reflection_for_pfsense_source(&mut out).helper_enabled);
+    }
 
     const BASELINE_26_7: &[u8] = br#"<opnsense><OPNsense><Firewall><Filter version="1.0.6"><rules/><snatrules/><npt/><onetoone/></Filter></Firewall></OPNsense></opnsense>"#;
 
