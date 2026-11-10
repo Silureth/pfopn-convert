@@ -19,6 +19,7 @@ VPN conversions, checked against pfSense 2.7's and OPNsense 26.7.8's code. OPNse
 - `<ipsec><enable>` is set; without it OPNsense stops strongSwan.
 - Firewall rules for IKE, NAT-T and ESP from each peer are added, as pfSense did automatically.
 - The baseline's IPsec and Swanctl settings are kept instead of being replaced.
+- Tunnels with a keep-alive ping host start immediately (start action "start"). pfSense pinged them up as soon as IPsec started; on demand, they stayed down after a cutover until traffic or a manual connect.
 - Mobile tunnels and VTI phase 2 entries are not converted (warning).
 
 ### Other
@@ -27,6 +28,7 @@ VPN conversions, checked against pfSense 2.7's and OPNsense 26.7.8's code. OPNse
 - LDAP servers: pfSense's "STARTTLS Encrypt" is mapped to OPNsense's StartTLS (it became LDAPS); a disabled extended query is cleared.
 - Port forwards with pfSense's "NAT + proxy" reflection are set to pure NAT (OPNsense's model only offers that), and "Automatic outbound NAT for Reflection" is switched on when an active rule used proxy mode, so clients in the target's own subnet keep working.
 - `scan` knows Zabbix Proxy and the OpenVPN Client Export package.
+- A baseline exported before its setup wizard was finished no longer makes the converted box open the wizard after every login (`trigger_initial_wizard` is dropped).
 
 ## v0.2.0 (2026-11-06)
 

@@ -190,6 +190,16 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
     // Apply platform-specific cleanup and normalization
     let mut plugin_report: Option<opn_plugins::PluginReport> = None;
     if to == "opnsense" {
+        // A fresh baseline exported before its setup wizard was finished still
+        // carries this marker; OPNsense would then open the wizard after every
+        // login, and finishing it would overwrite the converted settings.
+        let before = out.children.len();
+        out.children.retain(|c| c.tag != "trigger_initial_wizard");
+        if out.children.len() != before {
+            eprintln!(
+                "info: removed the baseline's pending setup wizard marker (trigger_initial_wizard); the converted config is already set up"
+            );
+        }
         pfblocker::prune_pfblocker_floating_rules_for_opnsense(&mut out);
         let flags = rule_flags::normalize_empty_flags_for_opnsense(&mut out);
         if flags > 0 {

@@ -317,6 +317,56 @@ mod tests {
     }
 
     #[test]
+    fn keepalive_ping_host_starts_the_tunnel_immediately() {
+        // pfSense runs ping_hosts.sh when IPsec starts, so tunnels with a ping
+        // host come up at once; on-demand (trap) would leave them down.
+        let phase2 = |ikeid: &str, net: &str, ping: &str| {
+            format!(
+                "<phase2><ikeid>{ikeid}</ikeid><mode>tunnel</mode><protocol>esp</protocol>\
+                 <localid><type>lan</type></localid>\
+                 <remoteid><type>network</type><address>{net}</address><netbits>24</netbits></remoteid>\
+                 <encryption-algorithm-option><name>aes256gcm</name><keylen>128</keylen></encryption-algorithm-option>\
+                 <pfsgroup>14</pfsgroup><lifetime>3600</lifetime>{ping}</phase2>"
+            )
+        };
+        let phase1 = |ikeid: &str, peer: &str| {
+            format!(
+                "<phase1><ikeid>{ikeid}</ikeid><iketype>ikev2</iketype><interface>wan</interface>\
+                 <remote-gateway>{peer}</remote-gateway><authentication_method>pre_shared_key</authentication_method>\
+                 <pre-shared-key>secret</pre-shared-key><myid_type>myaddress</myid_type><peerid_type>peeraddress</peerid_type>\
+                 <encryption><item><encryption-algorithm><name>aes</name><keylen>256</keylen></encryption-algorithm>\
+                 <hash-algorithm>sha256</hash-algorithm><dhgroup>14</dhgroup></item></encryption>\
+                 <lifetime>86400</lifetime><descr>T{ikeid}</descr><startaction></startaction></phase1>"
+            )
+        };
+        let xml = format!(
+            "<pfsense><interfaces><wan><if>vtnet0</if><ipaddr>203.0.113.20</ipaddr><subnet>27</subnet></wan>\
+             <lan><if>vtnet1</if><ipaddr>10.90.0.254</ipaddr><subnet>24</subnet></lan></interfaces>\
+             <ipsec>{}{}{}{}</ipsec></pfsense>",
+            phase1("1", "198.51.100.10"),
+            phase1("2", "198.51.100.20"),
+            phase2("1", "10.10.0.0", "<pinghost>10.10.0.5</pinghost>"),
+            phase2("2", "10.20.0.0", ""),
+        );
+        let source = parse(xml.as_bytes()).expect("source parse");
+        let target = parse(b"<opnsense/>").expect("target parse");
+        let mut out = target.clone();
+        to_opnsense(&mut out, &source, &target);
+        let starts: Vec<String> = out
+            .get_child("OPNsense")
+            .and_then(|o| o.get_child("Swanctl"))
+            .and_then(|s| s.get_child("children"))
+            .map(|c| {
+                c.get_children("child")
+                    .iter()
+                    .map(|ch| ch.get_text(&["start_action"]).unwrap_or("").to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(starts, vec!["start", "trap"]);
+    }
+
+    #[test]
     fn maps_pfsense_phase1_phase2_into_opnsense_swanctl() {
         let source = parse(
             br#"<pfsense>

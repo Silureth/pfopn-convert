@@ -361,6 +361,7 @@ pub fn map_pf_ipsec_to_opnsense(
             let mut mode = "tunnel";
             let mut rekey = 3600u64;
             let mut p2_descr = String::new();
+            let mut pinghost = false;
             for p2 in &members {
                 let p2_mode = text_or(p2, "mode", "tunnel");
                 if p2_mode == "transport" {
@@ -409,8 +410,9 @@ pub fn map_pf_ipsec_to_opnsense(
                     p2_descr = text_or(p2, "descr", "").to_string();
                 }
                 if !text_or(p2, "pinghost", "").is_empty() {
+                    pinghost = true;
                     warn(format!(
-                        "keep-alive ping host {} not converted (OPNsense connections have none; 'start' actions keep the tunnel up)",
+                        "keep-alive ping host {} not converted (OPNsense has none); the tunnel is set to start immediately instead, as the pings kept it up on pfSense",
                         text_or(p2, "pinghost", "")
                     ));
                 }
@@ -444,7 +446,15 @@ pub fn map_pf_ipsec_to_opnsense(
                     "0"
                 },
             );
-            push_text_child(&mut child, "start_action", start_action);
+            // pfSense runs ping_hosts.sh when IPsec starts and then
+            // periodically, so a tunnel with a ping host comes up at once and
+            // stays up. OPNsense's equivalent is starting the child on load.
+            let child_start = if pinghost && start_action == "trap" {
+                "start"
+            } else {
+                start_action
+            };
+            push_text_child(&mut child, "start_action", child_start);
             push_text_child(&mut child, "close_action", close_action);
             push_text_child(&mut child, "dpd_action", dpd_action);
             push_text_child(&mut child, "mode", mode);

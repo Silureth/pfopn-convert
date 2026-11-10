@@ -425,7 +425,7 @@ A pfSense 2.9.0 config was converted, restored and taken into production on OPNs
 - **1:1 NAT with a dynamic external address** (`wanip` and similar) is skipped.
 - **Alias per-entry descriptions** (pfSense `detail`) are dropped, and `url_ports`/`urltable_ports` aliases become empty port aliases, as in OPNsense's own migration.
 - **Port forwards** lose their link to the filter rule on 26.7 (the rule stays).
-- **IPsec:** mobile (remote access) tunnels and route-based (VTI) phase 2 entries are not converted; they stay in the legacy section (warnings). Proposals OPNsense does not list (for example 3DES, GCM with short ICVs, a separate PRF) are dropped with a warning, keep-alive ping hosts and phase 2 NAT/BINAT are not converted, and AH phase 2 entries fall back to ESP.
+- **IPsec:** mobile (remote access) tunnels and route-based (VTI) phase 2 entries are not converted; they stay in the legacy section (warnings). Proposals OPNsense does not list (for example 3DES, GCM with short ICVs, a separate PRF) are dropped with a warning, keep-alive ping hosts are not converted (tunnels that had one start immediately instead, so they stay up as on pfSense), phase 2 NAT/BINAT is not converted, and AH phase 2 entries fall back to ESP.
 - **OpenVPN:** clients and shared-key servers are not converted (they stay in the legacy section; warnings). Custom options, NetBIOS/WINS, compression and per-client connection limits have no instance setting (warnings).
 - **Kea client IDs** from pfSense static mappings are not transferred.
 - **pfSense-only `system` settings** (for example `earlyshellcmd`, `pkg_repo_conf_path`) are carried over; OPNsense ignores them. pfSense's NTP pool (`*.pfsense.pool.ntp.org`) is replaced by OPNsense's.
