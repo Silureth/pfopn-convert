@@ -21,6 +21,7 @@ pub mod opn_plugins;
 pub mod opnsense_assignments;
 pub mod pfblocker;
 pub mod ppps;
+pub mod reply_to;
 pub mod rule_flags;
 pub mod section_sync;
 pub mod staticroutes;

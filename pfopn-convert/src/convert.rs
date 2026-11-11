@@ -50,7 +50,8 @@ use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     auth_servers, bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
     interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, openvpn, opn_plugins,
-    opnsense_assignments, pfblocker, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames, wireguard,
+    opnsense_assignments, pfblocker, reply_to, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames,
+    wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -249,6 +250,22 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                         ""
                     }
                 );
+            }
+            let reply = reply_to::exempt_local_subnets(&mut out);
+            if reply.twins_added + reply.disabled_on_rule > 0 {
+                eprintln!(
+                    "info: reply-to: pfSense answered hosts in an interface's own subnet directly, OPNsense sends the reply to the gateway; added {} rule(s) with \"Disable reply-to\" for those hosts{}, disabled reply-to on {} rule(s) whose source is entirely in that subnet",
+                    reply.twins_added,
+                    if reply.aliases_added.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (new alias(es): {})", reply.aliases_added.join(", "))
+                    },
+                    reply.disabled_on_rule
+                );
+            }
+            for warning in &reply.warnings {
+                eprintln!("warning: reply-to: {warning}");
             }
             let reflection = nat_mvc::port_forward_reflection_for_pfsense_source(&mut out);
             if reflection.rewritten > 0 {

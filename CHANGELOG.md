@@ -22,6 +22,10 @@ VPN conversions, checked against pfSense 2.7's and OPNsense 26.7.8's code. OPNse
 - Tunnels with a keep-alive ping host start immediately (start action "start"). pfSense pinged them up as soon as IPsec started; on demand, they stayed down after a cutover until traffic or a manual connect.
 - Mobile tunnels and VTI phase 2 entries are not converted (warning).
 
+### Firewall
+
+- pfSense's kernel sends replies to hosts in an interface's own subnet directly, even on rules with reply-to; OPNsense's sends them to the gateway, which drops them if it is a stateful firewall. Pass rules on gateway interfaces get a copy with "Disable reply-to" for the sources in that subnet (mixed aliases are split into an `<alias>_<if>_local` alias); rules whose source lies entirely in the subnet get "Disable reply-to" themselves. Aliases that cannot be resolved and DHCP interfaces are reported.
+
 ### Other
 
 - Zabbix Proxy 6/7 → `os-zabbix6-proxy` / `os-zabbix7-proxy`.
