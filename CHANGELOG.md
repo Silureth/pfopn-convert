@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 (2026-11-11)
 
-VPN conversions, checked against pfSense 2.7's and OPNsense 26.7.8's code. OPNsense 26.7 only runs legacy OpenVPN servers and IPsec tunnels with the os-openvpn-legacy / os-strongswan-legacy plugins, so both are now converted completely and the legacy copies removed.
+VPN conversions, checked against pfSense's and OPNsense 26.7.8's code, and fixes from a second production migration: a pfSense box with an OpenVPN server (LDAP users), two IKEv2 site-to-site tunnels and a Zabbix proxy, converted to OPNsense 26.7.8 and verified live (see [Tested migration](https://github.com/Silureth/pfopn-convert#tested-migration)). OPNsense 26.7 only runs legacy OpenVPN servers and IPsec tunnels with the os-openvpn-legacy / os-strongswan-legacy plugins, so both are now converted completely and the legacy copies removed.
+
+Boxes already migrated with v0.2.0 do not need a new conversion. Check them for the two firewall problems fixed here (reply-to for hosts in a gateway interface's own subnet, and "NAT + proxy" reflection on port forwards); both can be fixed by hand.
 
 ### OpenVPN
 

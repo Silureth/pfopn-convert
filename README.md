@@ -5,7 +5,7 @@
 
 CLI for migrating firewall configs between pfSense and OPNsense, with section-aware diff analysis and pre-restore validation.
 
-> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) focused on **pfSense CE 2.8 / 2.9 → OPNsense 26.7**. It fixes several conversion bugs that changed firewall behaviour silently, adds support for OPNsense 26.7's new rule format, and converts the DNS Resolver, remote syslog and common plugins. It has been used for a real pfSense 2.9.0 → OPNsense 26.7.8 cutover; see [Tested migration](#tested-migration), [Changes in this fork](#changes-in-this-fork) and [OPNsense 26.7 targets](#opnsense-267-targets).
+> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) focused on **pfSense CE 2.8 / 2.9 → OPNsense 26.7**. It fixes several conversion bugs that changed firewall behaviour silently, adds support for OPNsense 26.7's new rule format, and converts the DNS Resolver, remote syslog and common plugins. It has been used for two production pfSense → OPNsense 26.7.8 cutovers, including OpenVPN and IPsec; see [Tested migration](#tested-migration), [Changes in this fork](#changes-in-this-fork) and [OPNsense 26.7 targets](#opnsense-267-targets).
 
 > WARNING: This tool can break network connectivity or lock you out if used incorrectly. It is intended for restore/migration onto fresh destination installs. Do not restore to production systems unless you fully understand the generated changes and have rollback access.
 
@@ -94,7 +94,9 @@ Read the `info:` and `warning:` lines that `convert` prints. They list everythin
 
 ## Tested migration
 
-This fork was used to migrate a production pfSense firewall to OPNsense. Every problem found on the way was fixed in the converter and got a `verify` check (see [Changes in this fork](#changes-in-this-fork)).
+This fork was used to migrate two production pfSense firewalls to OPNsense. Every problem found on the way was fixed in the converter and got a `verify` check (see [Changes in this fork](#changes-in-this-fork)).
+
+### First box: multi-WAN, port forwards, plugins (v0.2.0)
 
 **Source:** pfSense CE 2.9.0 (config version 24.6), Proxmox VM, 6 virtio interfaces (3 WANs, one of them disabled, and 3 internal networks; VLANs tagged on the hypervisor).
 The config had about 100 firewall rules (floating rules, policy routing over two gateways), hybrid outbound NAT with 43 rules, 58 port forwards, 44 aliases, 13 IP-alias virtual IPs, 4 gateways, DNS Resolver host and domain overrides, remote syslog, and the packages Zabbix Agent 7, node_exporter, Shellcmd and pfBlockerNG-devel.
@@ -117,7 +119,22 @@ Verified on the destination after the restore and the cutover:
 
 Converted and visible in the GUI, but not tested separately: policy routing and outbound NAT for client traffic, DNS Resolver query forwarding (domain override), DNSSEC and hardening options.
 
-Not exercised by this migration (the source had none configured): OpenVPN, IPsec, WireGuard, DHCP (ISC/Kea), static routes, bridges, the OPNsense → pfSense direction. Those conversions are covered by unit tests and `verify` only.
+Found after the cutover: TCP connections from hosts in one WAN's own subnet to services behind the firewall failed (see the reply-to row in [Changes in this fork](#changes-in-this-fork)); v0.3.0 fixes this.
+
+### Second box: OpenVPN, IPsec, Zabbix proxy (v0.3.0)
+
+**Source:** pfSense CE (config version 24.6), Proxmox VM, 3 interfaces (WAN, LAN, one internal network). About 40 firewall rules, manual outbound NAT, port forwards with "NAT + proxy" reflection, an OpenVPN server with LDAP authentication (group restriction via extended query) and a TLS key, two IKEv2 site-to-site tunnels with keep-alive ping hosts (one of them to a pfSense box), and the packages Zabbix Agent 7, Zabbix Proxy 7, node_exporter, Shellcmd and OpenVPN Client Export.
+
+**Destination:** OPNsense 26.7.8, plugins `os-openvpn-legacy`, `os-strongswan-legacy`, `os-zabbix7-agent`, `os-zabbix7-proxy`, `os-node_exporter` and `os-qemu-guest-agent` installed before the baseline export. The converted config was restored and cut over directly, with the old pfSense VM as rollback.
+
+| Area | Result |
+|---|---|
+| OpenVPN | a client connects with its existing pfSense profile and an LDAP user |
+| IPsec | both tunnels come up and pass traffic (after the start-action fix: they now start immediately) |
+| Zabbix proxy | connects to the server with PSK; data arrives |
+| Firewall, services | ruleset loads (`pfctl -nf` clean); all services start |
+
+Not exercised by these migrations: OpenVPN clients and shared-key servers, mobile IPsec, WireGuard, DHCP (ISC/Kea), static routes, bridges, the OPNsense → pfSense direction. Those conversions are covered by unit tests and `verify` only.
 
 ## Changes in this fork
 
@@ -416,7 +433,7 @@ Source and target versions this fork was developed against:
 - pfSense CE 2.8.1 (config version 24.0) and 2.9.0 (config version 24.6)
 - OPNsense 26.1 and 26.7 baselines (checked against OPNsense 26.7.8 source)
 
-A pfSense 2.9.0 config was converted, restored and taken into production on OPNsense 26.7.8; see [Tested migration](#tested-migration) for what was verified. Test in a VM first.
+Two pfSense configs were converted, restored and taken into production on OPNsense 26.7.8; see [Tested migration](#tested-migration) for what was verified. Test in a VM first.
 
 ### Known limitations
 
