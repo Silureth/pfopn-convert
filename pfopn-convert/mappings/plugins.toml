@@ -95,6 +95,14 @@ status = "supported"
 note = "pfSense starts it from Shellcmd; OPNsense has a plugin. Enabled when the plugin is in the baseline."
 
 [[plugin]]
+id = "net-snmp"
+pfsense_markers = []
+opnsense_markers = ["os-net-snmp"]
+compatible_targets = ["pfsense", "opnsense"]
+status = "partial"
+note = "pfSense's built-in SNMP daemon (bsnmpd) becomes os-net-snmp when the plugin is in the baseline: community, location, contact, bind address. The pf, netgraph and regex MIB modules have no equivalent."
+
+[[plugin]]
 id = "shellcmd"
 pfsense_markers = ["shellcmd"]
 opnsense_markers = []

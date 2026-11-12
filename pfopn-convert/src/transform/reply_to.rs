@@ -23,9 +23,13 @@
 //!   the rule using it, with reply-to disabled, is inserted above. The other
 //!   sources keep reply-to, as on pfSense.
 //!
-//! Sources that cannot be resolved (URL tables, GeoIP, host names, inverted
-//! matches) and interfaces whose subnet is only known at runtime (DHCP) are
-//! reported instead.
+//! Sources that cannot be resolved (URL tables, GeoIP, host names) are a
+//! special case. On the interface of the default IPv4 gateway (with gateway
+//! switching off), reply-to is disabled on the whole rule: replies to hosts
+//! outside the subnet then follow the default route, which is the same
+//! gateway, and replies to hosts inside go straight to them, as on pfSense.
+//! On other interfaces they are reported, as are inverted matches and
+//! interfaces whose subnet is only known at runtime (DHCP).
 //!
 //! Runs on pfSense-format `<filter>` rules, before they are moved into the
 //! OPNsense rule model, and on aliases already in the OPNsense alias model.
@@ -46,6 +50,9 @@ pub struct ReplyToReport {
     pub twins_added: usize,
     /// Aliases created for the local members of an alias.
     pub aliases_added: Vec<String>,
+    /// Rules on the default gateway's interface with sources that cannot be
+    /// resolved, on which reply-to was disabled ("label (entries)").
+    pub disabled_unresolved: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -62,6 +69,7 @@ pub fn exempt_local_subnets(out: &mut XmlNode) -> ReplyToReport {
     let mut generated: BTreeMap<(String, String, String), String> = BTreeMap::new();
     let mut new_aliases: Vec<XmlNode> = Vec::new();
     let mut dynamic_warned: BTreeSet<String> = BTreeSet::new();
+    let default_iface = default_gateway_interface(out);
 
     let Some(filter) = out.children.iter_mut().find(|c| c.tag == "filter") else {
         return report;
@@ -123,7 +131,26 @@ pub fn exempt_local_subnets(out: &mut XmlNode) -> ReplyToReport {
                 Coverage::None
             }
         } else if let Some(address) = source.get_text(&["address"]).map(str::trim) {
-            classify_address(address, &local, &aliases, &mut report.warnings, &label)
+            let (coverage, unknown) = classify_address(address, &local, &aliases);
+            if unknown.is_empty() {
+                coverage
+            } else if family != "inet6"
+                && family != "inet46"
+                && default_iface.as_deref() == Some(iface.as_str())
+            {
+                set_flag(&mut rule, "disablereplyto");
+                report
+                    .disabled_unresolved
+                    .push(format!("{label} ({})", unknown.join(", ")));
+                result.push(rule);
+                continue;
+            } else {
+                report.warnings.push(format!(
+                    "rule {label}: alias '{address}' has entries that cannot be checked against the interface subnet ({}); pfSense sent replies to hosts in that subnet directly, OPNsense sends them to the gateway",
+                    unknown.join(", ")
+                ));
+                coverage
+            }
         } else {
             Coverage::None
         };
@@ -201,23 +228,23 @@ fn reply_to_applies(rule: &XmlNode) -> bool {
         && !pf_flag_is_set(rule, "disablereplyto")
 }
 
+/// The coverage of a source address or alias, and the alias entries that
+/// cannot be resolved.
 fn classify_address(
     address: &str,
     local: &[Net],
     aliases: &BTreeMap<String, AliasDef>,
-    warnings: &mut Vec<String>,
-    label: &str,
-) -> Coverage {
+) -> (Coverage, Vec<String>) {
     if let Some(net) = Net::parse(address) {
         if local.iter().any(|l| l.contains(&net)) {
-            return Coverage::All;
+            return (Coverage::All, Vec::new());
         }
         let inner: Vec<String> = local
             .iter()
             .filter(|l| net.contains(l))
             .map(|n| n.to_string())
             .collect();
-        return match inner.len() {
+        let coverage = match inner.len() {
             0 => Coverage::None,
             1 => Coverage::PartialNetwork(inner[0].clone()),
             _ => Coverage::Partial {
@@ -225,19 +252,14 @@ fn classify_address(
                 members: inner,
             },
         };
+        return (coverage, Vec::new());
     }
     if !aliases.contains_key(address) {
-        return Coverage::None;
+        return (Coverage::None, Vec::new());
     }
     let mut entries = Vec::new();
     let mut unknown = Vec::new();
     resolve_alias(address, aliases, &mut entries, &mut unknown, 0);
-    if !unknown.is_empty() {
-        warnings.push(format!(
-            "rule {label}: alias '{address}' has entries that cannot be checked against the interface subnet ({}); pfSense sent replies to hosts in that subnet directly, OPNsense sends them to the gateway",
-            unknown.join(", ")
-        ));
-    }
     let mut members = Vec::new();
     let mut all_local = unknown.is_empty() && !entries.is_empty();
     for entry in &entries {
@@ -271,7 +293,7 @@ fn classify_address(
             .unwrap_or((true, u128::MAX, 0))
     });
     members.dedup();
-    if members.is_empty() {
+    let coverage = if members.is_empty() {
         Coverage::None
     } else if all_local {
         Coverage::All
@@ -280,7 +302,47 @@ fn classify_address(
             alias: address.to_string(),
             members,
         }
+    };
+    (coverage, unknown)
+}
+
+/// The interface of the default IPv4 gateway, unless OPNsense may switch the
+/// default gateway (then replies without reply-to could leave elsewhere).
+/// Reads the Gateways model (`gateways_mvc` has run) or pfSense's legacy
+/// `defaultgw4`.
+fn default_gateway_interface(out: &XmlNode) -> Option<String> {
+    let system = out.get_child("system");
+    if system.is_some_and(|s| s.get_child("gw_switch_default").is_some()) {
+        return None;
     }
+    let mvc = out
+        .get_child("OPNsense")
+        .and_then(|o| o.get_child("Gateways"))
+        .map(|g| g.get_children("gateway_item"))
+        .unwrap_or_default();
+    let legacy = out
+        .get_child("gateways")
+        .map(|g| g.get_children("gateway_item"))
+        .unwrap_or_default();
+    let legacy_default = out
+        .get_child("gateways")
+        .map(|g| text(g, "defaultgw4"))
+        .unwrap_or_default();
+    let item = mvc
+        .iter()
+        .find(|g| text(g, "defaultgw") == "1" && text(g, "ipprotocol") != "inet6")
+        .or_else(|| {
+            legacy
+                .iter()
+                .find(|g| !legacy_default.is_empty() && text(g, "name") == legacy_default)
+        })?;
+    let name = text(item, "name");
+    // Only when that interface's own gateway is the default gateway.
+    out.get_child("interfaces")?
+        .children
+        .iter()
+        .find(|i| text(i, "gateway") == name)
+        .map(|i| i.tag.clone())
 }
 
 struct AliasDef {
@@ -798,5 +860,49 @@ nested</content></alias>
         let report = exempt_local_subnets(&mut out);
         assert_eq!(report.twins_added, 0);
         assert_eq!(report.warnings.len(), 2, "{:?}", report.warnings);
+    }
+
+    #[test]
+    fn unresolvable_source_on_the_default_gateway_interface_disables_reply_to() {
+        let rule = "<rule><type>pass</type><interface>wan</interface><source><address>feed</address></source><destination><any/></destination><descr>feed</descr></rule>";
+        let gateways = parse(
+            br#"<Gateways><gateway_item><name>WANGW</name><interface>wan</interface><ipprotocol>inet</ipprotocol><defaultgw>1</defaultgw></gateway_item></Gateways>"#,
+        )
+        .expect("parse");
+        let with_gateways = |switching: bool| {
+            let mut out = config(rule);
+            let opn = out
+                .children
+                .iter_mut()
+                .find(|c| c.tag == "OPNsense")
+                .unwrap();
+            opn.children.push(gateways.clone());
+            if switching {
+                out.children.push(
+                    parse(b"<system><gw_switch_default>1</gw_switch_default></system>")
+                        .expect("parse"),
+                );
+            }
+            out
+        };
+
+        // Replies to hosts outside the subnet follow the default route, which
+        // is the same gateway; hosts inside are answered directly.
+        let mut out = with_gateways(false);
+        let report = exempt_local_subnets(&mut out);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(report.disabled_on_rule, 0);
+        assert_eq!(report.disabled_unresolved.len(), 1);
+        assert!(report.disabled_unresolved[0].contains("feed"));
+        assert_eq!(
+            rules(&out),
+            vec![("feed".to_string(), "feed".to_string(), true)]
+        );
+
+        // With default gateway switching the default route may move: warn.
+        let mut out = with_gateways(true);
+        let report = exempt_local_subnets(&mut out);
+        assert!(report.disabled_unresolved.is_empty());
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
     }
 }

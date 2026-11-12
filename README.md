@@ -5,7 +5,7 @@
 
 Converts a pfSense CE config backup into an OPNsense 26.7 config that can be restored on a fresh OPNsense install, and checks it before the restore.
 
-> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) by Sheridan Computers Limited, who wrote the converter this fork builds on (see [Credits](#credits)). This fork covers **pfSense CE (config version 24.6) → OPNsense 26.7** only. It fixes conversion bugs that changed firewall behaviour silently, writes OPNsense 26.7's new rule format, and converts OpenVPN servers, IPsec site-to-site tunnels, the DNS Resolver, remote syslog and common plugins. It was used for two production cutovers to OPNsense 26.7.8; see [Tested migration](#tested-migration).
+> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) by Sheridan Computers Limited, who wrote the converter this fork builds on (see [Credits](#credits)). This fork covers **pfSense CE (config version 24.6) → OPNsense 26.7** only. It fixes conversion bugs that changed firewall behaviour silently, writes OPNsense 26.7's new rule format, and converts OpenVPN servers, IPsec site-to-site tunnels, the DNS Resolver, remote syslog and common plugins. It was used for three production cutovers to OPNsense 26.7.8; see [Tested migration](#tested-migration).
 >
 > Report problems with this fork [here](https://github.com/Silureth/pfopn-convert/issues), not to the original project.
 
@@ -48,14 +48,16 @@ The order used for the tested migrations:
 8. Check the GUI (rules, NAT, gateways, VPNs, services). If something is wrong, roll back to the snapshot, fix, convert again.
 9. Cut over: shut the source down and move the destination's ports to the real networks. Copying the source's MAC addresses keeps upstream ARP caches working; then never run both at once.
 10. After the first boot on the real networks, **reset the firewall states** once (Diagnostics → States → Reset, or `pfctl -F states`). Devices that send UDP without pause (syslog, NetFlow, SNMP traps) can create states while the boot ruleset is still active, before the port forwards load. Those states never expire while the traffic continues, so the forward is never applied: the packets go to the firewall itself and are dropped, and restarting the sender doesn't help. To clear single senders: `pfctl -k <sender-ip>`.
-11. Check the VPNs: site-to-site tunnels come up, VPN clients can log in. If the VPN peers cannot be reached from the isolated network in step 6, this is only possible after the cutover; keep the old firewall ready to start again.
+11. Check the URL table aliases (pfBlockerNG lists with `--pfblocker-feeds`, or your own): `pfctl -t <alias> -T show | wc -l` must not be 0. Their first download can run at boot before DNS works, and OPNsense only tries again when the alias's refresh interval runs out (up to a day). To fetch them now, delete the alias's files in `/var/db/aliastables/` (`<alias>.txt`, `<alias>.self.txt`, `<alias>.md5.txt`) and run `configctl filter refresh_aliases`.
+12. Check the VPNs: site-to-site tunnels come up, VPN clients can log in. If the VPN peers cannot be reached from the isolated network in step 6, this is only possible after the cutover; keep the old firewall ready to start again.
 
 ## Tested migration
 
-This fork was used to migrate two production pfSense CE (config version 24.6) firewalls to OPNsense 26.7.8:
+This fork was used to migrate three production pfSense CE (config version 24.6) firewalls to OPNsense 26.7.8:
 
 - **multi-WAN box:** policy routing, about 100 rules, 58 port forwards, virtual IPs, DNS Resolver, remote syslog, Zabbix agent and node_exporter;
-- **VPN box:** an OpenVPN server with LDAP users, two IKEv2 site-to-site tunnels and a Zabbix proxy.
+- **VPN box:** an OpenVPN server with LDAP users, two IKEv2 site-to-site tunnels and a Zabbix proxy;
+- **two-WAN box:** port forwards grouped by separators, a static route, OpenVPN and IPsec, SNMP, pfBlockerNG IP lists, Zabbix proxy.
 
 What was verified on each box, and what was not exercised, is in [docs/tested-migrations.md](docs/tested-migrations.md).
 
@@ -95,6 +97,7 @@ pfSense packages map to OPNsense plugins. A plugin's settings can only be conver
 |---|---|---|
 | Zabbix Agent 6/7 | `os-zabbix6-agent` / `os-zabbix7-agent` | servers, active checks, hostname, listen address/port, tuning, PSK encryption (identity and key), user parameters. Certificate TLS is not supported by the plugin. |
 | Zabbix Proxy 6/7 | `os-zabbix6-proxy` / `os-zabbix7-proxy` | enabled, active/passive mode, server and port, hostname, listen address/port, source address, config frequency, trappers, PSK encryption. TrapperTimeout, the SNMP trapper, advanced parameters and certificate TLS have no plugin setting (warnings). |
+| SNMP daemon (built into pfSense) | `os-net-snmp` | enabled, read-only community, location, contact, bind address (an interface becomes its IPv4 address). Always port 161; no read-write community, no traps. pfSense's pf, netgraph and regex MIB modules have no equivalent, so items that read them (for example pf states) stop working (warning). |
 | OpenVPN Client Export | built in (VPN → OpenVPN → Client Export) | nothing to convert |
 | node_exporter | `os-node_exporter` | enabled, listen interface (as its IP address), port, collectors. `boottime`, `textfile` and extra flags have no equivalent. |
 | Shellcmd `service qemu-guest-agent start` | `os-qemu-guest-agent` | enabled. Other Shellcmd commands are listed; use `/usr/local/etc/rc.syshook.d/` scripts. |
@@ -136,7 +139,7 @@ The binary also still contains the original tool's `diff`, `sections`, `inspect`
 
 ## Support status
 
-pfSense → OPNsense, by area. "Used live" means the area was in one of the two [tested migrations](#tested-migration) and was checked after the cutover. The other areas are covered by unit tests and `verify` only.
+pfSense → OPNsense, by area. "Used live" means the area was in one of the three [tested migrations](#tested-migration) and was checked after the cutover. The other areas are covered by unit tests and `verify` only.
 
 | Area | Converted | Used live |
 |---|---|---|
@@ -145,24 +148,25 @@ pfSense → OPNsense, by area. "Used live" means the area was in one of the two 
 | Firewall rules, port forwards, outbound NAT | yes; on 26.7+ in the new rule model | yes |
 | 1:1 NAT, NPt | yes; on 26.7+ in the new rule model | no |
 | Aliases, gateways | yes | yes |
-| Static routes | yes | no |
+| Static routes | yes | yes |
 | DHCP (ISC → Kea or ISC) | yes | no |
 | DNS Resolver (Unbound) | general and advanced settings, host and domain overrides, access lists | yes |
 | Remote syslog | remote servers become Syslog destinations | yes |
 | LDAP authentication servers | yes | yes |
 | OpenVPN | servers and client-specific overrides; not clients or shared-key servers | yes (server with LDAP users) |
-| IPsec | site-to-site tunnels; not mobile tunnels or VTI | yes (two IKEv2 tunnels) |
+| IPsec | site-to-site tunnels; not mobile tunnels or VTI | yes (IKEv2 tunnels, also with split connections) |
 | WireGuard | yes | no |
 | Tailscale | yes (the original converter's code, unchanged) | no |
 | Zabbix agent and proxy, node_exporter, QEMU guest agent | when the plugin is installed in the baseline (see [Plugins](#plugins)) | yes |
-| pfBlockerNG | IP lists only, with `--pfblocker-feeds`; DNSBL and its floating rules are not | no (the output matched a setup made by hand) |
-| Rule and port-forward separators | as categories (see [Separators](#separators)) | no (the output was checked, not restored) |
+| SNMP | to `os-net-snmp`, when the plugin is installed in the baseline (see [Plugins](#plugins)) | starts and listens; not polled (unused on the tested box) |
+| pfBlockerNG | IP lists only, with `--pfblocker-feeds`; DNSBL and its floating rules are not | yes (IP lists) |
+| Rule and port-forward separators | as categories (see [Separators](#separators)) | restored, not checked in the GUI |
 | Other packages | no; `scan` and `convert` list them | |
 
 Versions:
 
 - **Source:** pfSense CE configs with config version 24.6 (pfSense 2.9.0 on the first box). pfSense's behaviour was checked against its public source, which ends at 2.7.2.
-- **Destination:** OPNsense 26.7, checked against OPNsense 26.7.8's source; both migrations went to 26.7.8. With an older baseline, rules stay in the old format (see [OPNsense 26.7 targets](#opnsense-267-targets)).
+- **Destination:** OPNsense 26.7, checked against OPNsense 26.7.8's source; all three migrations went to 26.7.8. With an older baseline, rules stay in the old format (see [OPNsense 26.7 targets](#opnsense-267-targets)).
 
 ### Known limitations
 

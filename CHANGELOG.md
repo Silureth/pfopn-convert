@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Values pfSense stores in CDATA (LDAP bind DN and password, base DN, extended query, user names, passwords, ...) are HTML-decoded once, as pfSense's own config reader does. Before, a bind password with `<`, `>`, `&` or `"` arrived encoded (`&lt;`), and LDAP logins failed with "Invalid credentials". Check LDAP logins on boxes migrated with earlier versions; re-entering the bind password fixes them.
+- `docs/tested-migrations.md` and the README describe a third production migration (two WANs, SNMP, pfBlockerNG IP lists, separators, a static route).
+- README workflow: check URL table aliases after the first boot on the real network; their first download can fail before DNS works, and OPNsense only retries after the refresh interval.
+- reply-to: on the default gateway's interface, rules whose source cannot be resolved (host names, URL tables) get "Disable reply-to" instead of a warning. Without reply-to their replies take the default route, which is the same gateway, or go directly to hosts in the subnet, as on pfSense. Not done when default gateway switching is on.
+- pfSense's SNMP daemon is converted to the `os-net-snmp` plugin when it is installed in the baseline: community, location, contact and bind address. A warning lists the pfSense MIB modules Net-SNMP has no equivalent for (pf, netgraph, regex). `scan` and `verify` know the plugin.
+
 ## v0.4.0 (2026-11-12)
 
 pfSense's rule separators are kept as OPNsense rule categories, `convert` warns about accented letters pfSense lost in the backup, and the README now describes only this fork.

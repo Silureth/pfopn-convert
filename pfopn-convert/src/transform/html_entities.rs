@@ -1,14 +1,89 @@
-//! Decode HTML entities in pfSense description fields.
+//! Decode HTML entities in pfSense config values.
 //!
-//! pfSense stores user-entered descriptions HTML-encoded, sometimes twice
-//! (`kifel&amp;eacute;` for "kifelé", `serp-&gt;z7` for "serp->z7"). OPNsense
-//! stores and shows plain UTF-8, so the entities would appear literally in its
-//! GUI. Descriptions are decoded before conversion.
+//! pfSense writes every config value through `htmlentities()`, and for some
+//! fields inside `<![CDATA[...]]>` (`dump_xml_config_sub()`, `xmlparse.inc`);
+//! its own parser decodes them again with `html_entity_decode()` (`cData()`).
+//! Outside CDATA the XML decoding already undoes it, but inside CDATA nothing
+//! does: a bind password "a<b" arrives as "a&lt;b". These fields are decoded
+//! once, as pfSense does, before conversion.
+//!
+//! Descriptions are also HTML-encoded by pfSense's GUI before they are saved,
+//! sometimes twice (`kifel&amp;eacute;` for "kifelé", `serp-&gt;z7` for
+//! "serp->z7"). OPNsense stores and shows plain UTF-8, so descriptions are
+//! decoded until they no longer change.
 
 use xml_diff_core::XmlNode;
 
 /// Elements whose text is a free-form description.
 const DESCRIPTION_TAGS: &[&str] = &["descr", "description"];
+
+/// pfSense's `is_cdata_entity()` (RELENG_2_7_2 `xmlparse.inc`): elements whose
+/// name starts with one of these are written as CDATA with HTML entities.
+const PFSENSE_CDATA_PREFIXES: &[&str] = &[
+    "aclname",
+    "auth_pass",
+    "auth_prompt",
+    "auth_user",
+    "certca",
+    "certname",
+    "city",
+    "common_name",
+    "descr",
+    "detail",
+    "email",
+    "encryption_password",
+    "hint",
+    "ldap_attr",
+    "ldap_authcn",
+    "ldap_basedn",
+    "ldap_basedomain",
+    "ldap_bind",
+    "ldapbinddn",
+    "ldapbindpass",
+    "ldap_extended_query",
+    "ldap_filter",
+    "ldap_pam_groupdn",
+    "ldap_pass",
+    "ldap_user",
+    "login_banner",
+    "organization",
+    "password",
+    "rangedescr",
+    "state",
+    "text",
+    "username",
+    "varusersusername",
+    "varuserspassword",
+];
+
+/// Decode, once, the HTML entities pfSense put into its CDATA fields (see the
+/// module docs). Descriptions are left to `decode_descriptions`. Returns the
+/// names of the elements changed (values are never returned: some are
+/// passwords).
+pub fn decode_pfsense_cdata(root: &mut XmlNode) -> Vec<String> {
+    let mut changed = Vec::new();
+    decode_cdata_rec(root, &mut changed);
+    changed.sort();
+    changed.dedup();
+    changed
+}
+
+fn decode_cdata_rec(node: &mut XmlNode, changed: &mut Vec<String>) {
+    let tag = node.tag.as_str();
+    if !DESCRIPTION_TAGS.contains(&tag) && PFSENSE_CDATA_PREFIXES.iter().any(|p| tag.starts_with(p))
+    {
+        if let Some(text) = node.text.as_mut() {
+            let decoded = decode_once(text);
+            if decoded != *text {
+                *text = decoded;
+                changed.push(node.tag.clone());
+            }
+        }
+    }
+    for child in node.children.iter_mut() {
+        decode_cdata_rec(child, changed);
+    }
+}
 
 /// Decode entities in every description element below `root`. Returns the
 /// number of elements changed.
@@ -386,7 +461,30 @@ const NAMED: &[(&str, char)] = &[
 mod tests {
     use xml_diff_core::parse;
 
-    use super::{decode, decode_descriptions};
+    use super::{decode, decode_descriptions, decode_pfsense_cdata};
+
+    #[test]
+    fn decodes_pfsense_cdata_fields_once() {
+        let mut root = parse(
+            br#"<pfsense><system><authserver>
+              <ldap_bindpw><![CDATA[a&lt;b&amp;amp;c]]></ldap_bindpw>
+              <ldap_basedn><![CDATA[DC=x,DC=y]]></ldap_basedn>
+              <host>10.0.0.1</host>
+            </authserver>
+            <user><name>n&amp;lt;</name></user></system></pfsense>"#,
+        )
+        .expect("parse");
+        let changed = decode_pfsense_cdata(&mut root);
+        assert_eq!(changed, vec!["ldap_bindpw".to_string()]);
+        // Decoded once, as pfSense's html_entity_decode() does: "&amp;amp;"
+        // stays "&amp;".
+        assert_eq!(
+            root.get_text(&["system", "authserver", "ldap_bindpw"]),
+            Some("a<b&amp;c")
+        );
+        // Fields pfSense does not write as CDATA are left alone.
+        assert_eq!(root.get_text(&["system", "user", "name"]), Some("n&lt;"));
+    }
 
     #[test]
     fn reports_letters_pfsense_replaced_by_question_marks() {

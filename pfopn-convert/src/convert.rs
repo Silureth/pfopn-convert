@@ -129,6 +129,13 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
 
     // pfSense stores descriptions HTML-encoded; OPNsense shows them literally.
     if from == "pfsense" && to == "opnsense" {
+        let fields = html_entities::decode_pfsense_cdata(&mut input);
+        if !fields.is_empty() {
+            eprintln!(
+                "info: decoded HTML entities that pfSense's config writer added to: {} (pfSense decodes them when it reads its config)",
+                fields.join(", ")
+            );
+        }
         let decoded = html_entities::decode_descriptions(&mut input);
         if decoded > 0 {
             eprintln!(
@@ -282,6 +289,11 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                         format!(" (new alias(es): {})", reply.aliases_added.join(", "))
                     },
                     reply.disabled_on_rule
+                );
+            }
+            for rule in &reply.disabled_unresolved {
+                eprintln!(
+                    "info: reply-to: disabled on rule {rule}: its source cannot be resolved here, and on the default gateway's interface replies without reply-to take the same gateway (or go directly to hosts in the subnet, as on pfSense)"
                 );
             }
             for warning in &reply.warnings {

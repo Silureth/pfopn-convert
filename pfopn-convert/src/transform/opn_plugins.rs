@@ -22,6 +22,11 @@ const ZABBIX_MODEL: &[&str] = &["OPNsense", "ZabbixAgent"];
 const ZABBIX_PROXY_MODEL: &[&str] = &["OPNsense", "zabbixproxy", "general"];
 const NODE_EXPORTER_MODEL: &[&str] = &["OPNsense", "NodeExporter"];
 const QEMU_MODEL: &[&str] = &["OPNsense", "QemuGuestAgent"];
+const NETSNMP_MODEL: &[&str] = &["OPNsense", "netsnmp", "general"];
+
+/// pfSense's bsnmpd modules that Net-SNMP provides an equivalent for
+/// (IF-MIB and friends, HOST-RESOURCES-MIB, UCD-SNMP-MIB).
+const SNMP_MODULES_COVERED: &[&str] = &["mibii", "hostres", "ucd"];
 
 /// node_exporter collectors the OPNsense plugin can switch on.
 const NODE_EXPORTER_COLLECTORS: &[&str] = &[
@@ -54,8 +59,16 @@ pub struct PluginReport {
 
 pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> PluginReport {
     let mut report = PluginReport::default();
+    // pfSense's SNMP daemon is a core service, not a package.
+    convert_snmp(out, source, baseline, &mut report);
     let Some(packages) = source.get_child("installedpackages") else {
-        restore_firmware(out, baseline, &[]);
+        let wanted: Vec<String> = report
+            .converted
+            .iter()
+            .chain(report.missing.iter())
+            .map(|(plugin, _)| plugin.clone())
+            .collect();
+        restore_firmware(out, baseline, &wanted);
         return report;
     };
 
@@ -409,6 +422,105 @@ fn convert_node_exporter(
     }
 }
 
+/// pfSense's SNMP daemon (bsnmpd, `<snmpd>`) -> the `os-net-snmp` plugin.
+///
+/// Converted: enabled, read-only community, location, contact, and the bind
+/// address (an interface becomes its IPv4 address; "all" listens everywhere).
+/// The plugin always uses port 161 and has no read-write community and no
+/// traps. pfSense's pf, netgraph, bridge and regex MIB modules have no
+/// Net-SNMP equivalent: their OIDs (for example the pf state table) stop
+/// answering.
+fn convert_snmp(
+    out: &mut XmlNode,
+    source: &XmlNode,
+    baseline: &XmlNode,
+    report: &mut PluginReport,
+) {
+    let Some(snmp) = source.get_child("snmpd") else {
+        return;
+    };
+    if snmp.get_child("enable").is_none() {
+        return;
+    }
+    let plugin = "os-net-snmp".to_string();
+    let label = "SNMP daemon".to_string();
+    if node_at(baseline, NETSNMP_MODEL).is_none() {
+        report.missing.push((plugin, label));
+        return;
+    }
+
+    let community = text(snmp, "rocommunity");
+    if community.contains(char::is_whitespace) {
+        report.warnings.push(
+            "SNMP: the community contains spaces, which the Net-SNMP plugin does not accept; change it in Services > Net-SNMP".to_string(),
+        );
+    }
+    let bind = text(snmp, "bindip");
+    let listen = if bind.is_empty() || bind == "all" {
+        String::new()
+    } else if bind.parse::<std::net::IpAddr>().is_ok() {
+        bind.clone()
+    } else {
+        let ip = out
+            .get_child("interfaces")
+            .and_then(|i| i.get_child(&bind))
+            .map(|i| text(i, "ipaddr"))
+            .unwrap_or_default();
+        if ip.parse::<std::net::Ipv4Addr>().is_ok() {
+            ip
+        } else {
+            report.warnings.push(format!(
+                "SNMP: bind interface '{bind}' has no static IPv4 address; listening on all addresses"
+            ));
+            String::new()
+        }
+    };
+    let port = text(snmp, "pollport");
+    if !port.is_empty() && port != "161" {
+        report.warnings.push(format!(
+            "SNMP: pfSense polled on port {port}; the Net-SNMP plugin always uses 161"
+        ));
+    }
+    if !text(snmp, "rwcommunity").is_empty() {
+        report.warnings.push(
+            "SNMP: the read-write community is not converted (the Net-SNMP plugin has none)"
+                .to_string(),
+        );
+    }
+    if snmp.get_child("trapenable").is_some() || !text(snmp, "trapserver").is_empty() {
+        report.warnings.push(
+            "SNMP: traps are not converted (the Net-SNMP plugin does not send them)".to_string(),
+        );
+    }
+    let lost: Vec<&str> = snmp
+        .get_child("modules")
+        .map(|m| {
+            m.children
+                .iter()
+                .map(|c| c.tag.as_str())
+                .filter(|t| !SNMP_MODULES_COVERED.contains(t))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !lost.is_empty() {
+        report.warnings.push(format!(
+            "SNMP: pfSense's bsnmpd module(s) {} have no Net-SNMP equivalent; monitoring items that read them (for example pf states and counters from the pf module) stop working. Interface, host resource and UCD data stay available",
+            lost.join(", ")
+        ));
+    }
+
+    let Some(model) = model_mut(out, baseline, NETSNMP_MODEL) else {
+        return;
+    };
+    set_path(model, &["enabled"], "1");
+    set_path(model, &["community"], &community);
+    set_path(model, &["syslocation"], &text(snmp, "syslocation"));
+    set_path(model, &["syscontact"], &text(snmp, "syscontact"));
+    set_path(model, &["listen"], &listen);
+    out.children.retain(|c| c.tag != "snmpd");
+    report.converted.push((plugin, label));
+}
+
 /// Shellcmd: a `qemu-guest-agent` start command becomes the QEMU guest agent
 /// plugin; anything else has no OPNsense equivalent.
 fn convert_shellcmds(
@@ -567,6 +679,50 @@ mod tests {
             out.get_text(&["system", "firmware", "plugins"]),
             Some("os-isc-dhcp,os-qemu-guest-agent,os-zabbix7-agent,os-node_exporter")
         );
+    }
+
+    #[test]
+    fn converts_snmp_when_net_snmp_is_installed() {
+        let source = parse(
+            br#"<pfsense>
+              <interfaces><wan><ipaddr>203.0.113.4</ipaddr></wan></interfaces>
+              <snmpd><syslocation>Rack 1</syslocation><syscontact></syscontact><rocommunity>s3cret</rocommunity>
+                <modules><mibii/><netgraph/><pf/><hostres/><ucd/><regex/></modules>
+                <enable/><pollport>161</pollport><trapserver></trapserver><bindip>wan</bindip></snmpd>
+            </pfsense>"#,
+        )
+        .expect("parse");
+        let baseline = parse(
+            br#"<opnsense><OPNsense><netsnmp><general version="1.0.7"><enabled>0</enabled><community/><listen/></general></netsnmp></OPNsense></opnsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(
+            br#"<opnsense><interfaces><wan><ipaddr>203.0.113.4</ipaddr></wan></interfaces>
+              <snmpd><enable/></snmpd>
+              <OPNsense><netsnmp><general version="1.0.7"><enabled>0</enabled><community/><listen/></general></netsnmp></OPNsense></opnsense>"#,
+        )
+        .expect("parse");
+        let report = from_pfsense(&mut out, &source, &baseline);
+        assert_eq!(
+            report.converted,
+            vec![("os-net-snmp".to_string(), "SNMP daemon".to_string())]
+        );
+        let get = |tag: &str| out.get_text(&["OPNsense", "netsnmp", "general", tag]);
+        assert_eq!(get("enabled"), Some("1"));
+        assert_eq!(get("community"), Some("s3cret"));
+        assert_eq!(get("syslocation"), Some("Rack 1"));
+        assert_eq!(get("listen"), Some("203.0.113.4"));
+        assert!(out.get_child("snmpd").is_none());
+        assert!(report
+            .warnings
+            .iter()
+            .any(|w| w.contains("netgraph, pf, regex")));
+
+        // Without the plugin in the baseline it is reported as missing.
+        let bare = parse(b"<opnsense/>").expect("parse");
+        let mut out2 = parse(b"<opnsense/>").expect("parse");
+        let report2 = from_pfsense(&mut out2, &source, &bare);
+        assert_eq!(report2.missing[0].0, "os-net-snmp");
     }
 
     #[test]
