@@ -205,7 +205,7 @@ Third-party domain names (for example customer domains in rule descriptions) are
 
 pfopn-convert was written by **Sheridan Computers Limited** ([sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert), v0.1.0). This fork keeps its architecture: the XML diff and merge engine (`xml-diff-core`), the baseline-merge `convert` pipeline and interface mapping, the section mappings and validation profiles, the `scan`, `verify`, `diff`, `sections`, `inspect` and `migrate-check` commands, and the conversions this fork did not change (for example Tailscale and the OPNsense → pfSense direction). The original documentation is the [original project's README](https://github.com/sheridans/pfopn-convert/blob/c074efc3a212f6ae7a55efb229bc11652a748fbf/README.md). The changes made in this fork are listed in [CHANGELOG.md](CHANGELOG.md) and [docs/fixes.md](docs/fixes.md).
 
-The original code and this fork are distributed under the original BSD 2-clause license ([LICENSE](LICENSE)), which release archives after v0.3.0 contain next to the binary.
+The original code and this fork are distributed under the original BSD 2-clause license ([LICENSE](LICENSE)), which release archives from v0.4.0 on contain next to the binary.
 
 To support the original author:
 

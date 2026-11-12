@@ -1,12 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-11-12)
 
+pfSense's rule separators are kept as OPNsense rule categories, `convert` warns about accented letters pfSense lost in the backup, and the README now describes only this fork.
+
+### Conversion
+
+- pfSense's rule and port-forward separators become OPNsense rule categories, shown as groups in the 26.7 rule pages' tree view; a port forward's category also goes to its linked filter rule. The exact rule is in the README's [Separators](https://github.com/Silureth/pfopn-convert#separators) section. `--no-separator-categories` turns this off. Before, the separators were copied into a section OPNsense ignores.
 - `convert` warns about descriptions, separator texts and alias details in which pfSense stored an accented letter as `?` (letters outside Latin-1, such as ő and ű, are lost when pfSense saves them).
-- pfSense's rule and port-forward separators become OPNsense rule categories, shown as groups in the 26.7 tree view; a port forward's category also goes to its linked filter rule. The exact rule is in the README's [Separators](https://github.com/Silureth/pfopn-convert#separators) section. `--no-separator-categories` turns this off. Before, the separators were copied into a section OPNsense ignores.
 - `scan` lists the DNS Resolver (`unbound`) and remote syslog (`syslog`) of a pfSense config as supported; it asked for a manual review although `convert` converts both.
+
+### Documentation and releases
+
+- The README only describes this fork and credits the original project in detail. The fix list, the tested migrations and the reference for `scan`, `convert` and `verify` moved to `docs/`. The original tool's other commands and its OPNsense → pfSense direction are left to the [original project's README](https://github.com/sheridans/pfopn-convert/blob/c074efc3a212f6ae7a55efb229bc11652a748fbf/README.md). The support table says which areas were used in a production migration.
 - Release archives contain the `LICENSE` file next to the binary, as the original project's BSD license requires.
-- The README is shorter: the fix list, the tested migrations and the command reference moved to `docs/`, and the README and `docs/` now only describe this fork (the original tool's other commands and its OPNsense → pfSense direction are left to the original project's README), says which areas were used in a production migration, and credits the original project in detail.
 
 ## v0.3.0 (2026-11-11)
 
