@@ -24,6 +24,7 @@ pub mod ppps;
 pub mod reply_to;
 pub mod rule_flags;
 pub mod section_sync;
+pub mod separators;
 pub mod staticroutes;
 pub mod syslog_mvc;
 pub mod system_identity;

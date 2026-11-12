@@ -29,6 +29,47 @@ pub fn decode_descriptions(root: &mut XmlNode) -> usize {
     changed
 }
 
+/// Free-text elements checked for characters pfSense lost: descriptions,
+/// separator texts and alias entry details. Only these, so secrets
+/// (passwords, keys) are never printed.
+const FREE_TEXT_TAGS: &[&str] = &["descr", "description", "text", "detail"];
+
+/// Free-text values in which pfSense replaced a character by `?`.
+///
+/// pfSense stores some accented letters that are not in Latin-1 (for example
+/// Hungarian `ő` and `ű`) as a plain `?` in the config, so "Külsők" arrives
+/// as "Kuls?k" and the letter cannot be recovered from the backup. A `?`
+/// between two letters is reported as `path: text`; URLs are skipped.
+pub fn lost_characters(root: &XmlNode) -> Vec<String> {
+    let mut found = Vec::new();
+    collect_lost(root, &mut Vec::new(), &mut found);
+    found
+}
+
+fn collect_lost<'a>(node: &'a XmlNode, path: &mut Vec<&'a str>, found: &mut Vec<String>) {
+    path.push(node.tag.as_str());
+    if FREE_TEXT_TAGS.contains(&node.tag.as_str()) {
+        if let Some(text) = node.text.as_deref() {
+            let text = decode(text);
+            if !text.contains("://") && has_lost_letter(&text) {
+                let shown: String = text.chars().take(60).collect();
+                found.push(format!("{}: {shown}", path[1..].join("/")));
+            }
+        }
+    }
+    for child in &node.children {
+        collect_lost(child, path, found);
+    }
+    path.pop();
+}
+
+fn has_lost_letter(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .windows(3)
+        .any(|w| w[1] == '?' && w[0].is_alphabetic() && w[2].is_alphabetic())
+}
+
 /// Decode HTML entities, repeating while the text changes (pfSense
 /// sometimes encodes twice). Unknown or malformed entities are left as is.
 pub fn decode(input: &str) -> String {
@@ -346,6 +387,29 @@ mod tests {
     use xml_diff_core::parse;
 
     use super::{decode, decode_descriptions};
+
+    #[test]
+    fn reports_letters_pfsense_replaced_by_question_marks() {
+        let root = xml_diff_core::parse(
+            br#"<pfsense>
+              <filter>
+                <rule><descr>ok?</descr></rule>
+                <rule><descr>Kifel&amp;eacute; Kuls?k</descr></rule>
+                <separator><lan><sep0><text><![CDATA[Bels?k]]></text></sep0></lan></separator>
+              </filter>
+              <system><user><password>pa?ss</password></user></system>
+              <installedpackages><menu><url>/pkg.php?xml=a.xml</url><descr>see https://x.invalid/a?b=c</descr></menu></installedpackages>
+            </pfsense>"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            super::lost_characters(&root),
+            vec![
+                "filter/rule/descr: Kifel\u{e9} Kuls?k".to_string(),
+                "filter/separator/lan/sep0/text: Bels?k".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn decodes_single_and_double_encoded_entities() {

@@ -248,6 +248,10 @@ pub struct ConvertArgs {
     /// pfBlockerNG block/reject rules that use them take effect.
     #[arg(long)]
     pub pfblocker_feeds: bool,
+    /// Don't turn pfSense's rule and port-forward separators into OPNsense rule
+    /// categories. OPNsense has no separators, so they are then lost.
+    #[arg(long)]
+    pub no_separator_categories: bool,
     /// DHCP backend policy for target conversion.
     #[arg(long, value_enum, default_value_t = DhcpBackend::Auto)]
     pub backend: DhcpBackend,

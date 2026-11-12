@@ -255,6 +255,8 @@ fn supported_sections_for_platform(platform: &str) -> Vec<&'static str> {
             "ifgroups",
             "gateways",
             "staticroutes",
+            "unbound",
+            "syslog",
         ],
         "opnsense" => vec![
             "system",

@@ -163,13 +163,14 @@ fn convert_filter_rules(out: &mut XmlNode, stats: &mut FilterMvcStats) {
 
     let mut ordered: Vec<(usize, &XmlNode)> = legacy.iter().enumerate().collect();
     ordered.sort_by(legacy_rule_order);
+    let category_ids = super::separators::category_ids(out);
 
     let mut converted = Vec::new();
     let mut keep = Vec::new();
     let mut sequence = 1u32;
     for (idx, rule) in ordered {
         let label = rule_label("filter rule", idx, rule);
-        match map_filter_rule(rule, sequence, &label, stats) {
+        match map_filter_rule(rule, sequence, &label, &category_ids, stats) {
             Ok(mut node) => {
                 if let Some(bypass) = self_bypass_rule(&node) {
                     converted.push(bypass);
@@ -326,6 +327,7 @@ fn map_filter_rule(
     rule: &XmlNode,
     sequence: u32,
     label: &str,
+    category_ids: &std::collections::BTreeMap<String, String>,
     stats: &mut FilterMvcStats,
 ) -> Result<XmlNode, String> {
     let action = non_empty(text(rule, "type")).unwrap_or_else(|| "pass".to_string());
@@ -464,10 +466,23 @@ fn map_filter_rule(
         "tcpflags_any",
         bool01(pf_flag_is_set(rule, "tcpflags_any")),
     );
-    if non_empty(text(rule, "category")).is_some() {
-        stats.dropped_fields.push(format!(
-            "{label}: category not transferred (OPNsense categories are referenced by id)"
-        ));
+    // Legacy rules name their categories (comma-separated); the rule model
+    // references them by UUID.
+    let mut uuids = Vec::new();
+    for name in text(rule, "category")
+        .split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        match category_ids.get(name) {
+            Some(uuid) => uuids.push(uuid.clone()),
+            None => stats.dropped_fields.push(format!(
+                "{label}: category '{name}' does not exist on the target, not transferred"
+            )),
+        }
+    }
+    if !uuids.is_empty() {
+        push(&mut node, "categories", &uuids.join(","));
     }
     push(&mut node, "description", &text(rule, "descr"));
 

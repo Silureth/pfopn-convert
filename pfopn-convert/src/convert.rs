@@ -50,8 +50,8 @@ use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     auth_servers, bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
     interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, openvpn, opn_plugins,
-    opnsense_assignments, pfblocker, reply_to, rule_flags, syslog_mvc, unbound_mvc, vlan_ifnames,
-    wireguard,
+    opnsense_assignments, pfblocker, reply_to, rule_flags, separators, syslog_mvc, unbound_mvc,
+    vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -115,6 +115,18 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
         );
     }
 
+    if from == "pfsense" {
+        let lost = html_entities::lost_characters(&input);
+        if !lost.is_empty() {
+            eprintln!(
+                "warning: pfSense stored some accented letters as '?' in this backup (letters outside Latin-1, such as \u{151} and \u{171}, are lost when pfSense saves them); the original letter cannot be recovered from the backup. Fix these texts on pfSense or in the exported XML before converting, or in OPNsense after the restore:"
+            );
+            for item in &lost {
+                eprintln!("warning:   {item}");
+            }
+        }
+    }
+
     // pfSense stores descriptions HTML-encoded; OPNsense shows them literally.
     if from == "pfsense" && to == "opnsense" {
         let decoded = html_entities::decode_descriptions(&mut input);
@@ -124,6 +136,14 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
             );
         }
     }
+
+    // Separators become categories. Tagged on the source, before the merge,
+    // so rules added or removed later don't shift their positions.
+    let separator_plan = if from == "pfsense" && to == "opnsense" && !args.no_separator_categories {
+        Some(separators::tag_rules(&mut input))
+    } else {
+        None
+    };
 
     // Load or create target baseline config
     let target = resolve_target(&args, to)?;
@@ -279,6 +299,11 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                     "info: enabled \"Automatic outbound NAT for Reflection\" so reflected port forwards keep working for clients in the target's own subnet, as pfSense's proxy mode did"
                 );
             }
+        }
+        if let Some(plan) = &separator_plan {
+            // Before filter_mvc, which looks the categories up by name.
+            separators::create_categories(&mut out, plan);
+            print_separator_report(plan);
         }
         let nat = nat_mvc::move_legacy_nat_to_mvc(&mut out, &target);
         if nat.onetoone_moved + nat.npt_moved > 0 {
@@ -483,6 +508,41 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
 }
 
 /// Tell the user which OPNsense plugins the source needs and what to do.
+fn print_separator_report(plan: &separators::SeparatorPlan) {
+    if !plan.categories.is_empty() {
+        let list: Vec<String> = plan
+            .categories
+            .iter()
+            .map(|c| {
+                let lists: Vec<String> = c.rules.iter().map(|(l, n)| format!("{l} {n}")).collect();
+                format!("{} ({})", c.name, lists.join(", "))
+            })
+            .collect();
+        eprintln!(
+            "info: separators: {} pfSense separator(s) became rule categories (rules per list): {}{}",
+            plan.categories.len(),
+            list.join("; "),
+            if plan.linked > 0 {
+                format!(
+                    "; {} filter rule(s) got the category of their linked port forward",
+                    plan.linked
+                )
+            } else {
+                String::new()
+            }
+        );
+    }
+    if !plan.empty.is_empty() {
+        eprintln!(
+            "info: separators: no rules under {}; no category created",
+            plan.empty.join(", ")
+        );
+    }
+    for renamed in &plan.renamed {
+        eprintln!("info: separators: category renamed (commas are not allowed): {renamed}");
+    }
+}
+
 fn print_plugin_report(report: &opn_plugins::PluginReport) {
     for warning in &report.warnings {
         eprintln!("warning: {warning}");

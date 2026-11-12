@@ -84,9 +84,10 @@ jobs:
           binary = pathlib.Path('target/${{ matrix.target }}/release/${{ matrix.binary-name }}')
           with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
               zf.write(binary, arcname=binary.name)
+              zf.write('LICENSE', arcname='LICENSE')
           "
           else
-            tar -czf "$ARCHIVE_NAME" -C "target/${{ matrix.target }}/release" "${{ matrix.binary-name }}"
+            tar -czf "$ARCHIVE_NAME" -C "target/${{ matrix.target }}/release" "${{ matrix.binary-name }}" -C "$GITHUB_WORKSPACE" LICENSE
           fi
           echo "archive=$ARCHIVE_NAME" >> "$GITHUB_OUTPUT"
 

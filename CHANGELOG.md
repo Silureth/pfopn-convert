@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `convert` warns about descriptions, separator texts and alias details in which pfSense stored an accented letter as `?` (letters outside Latin-1, such as ő and ű, are lost when pfSense saves them).
+- pfSense's rule and port-forward separators become OPNsense rule categories, shown as groups in the 26.7 tree view; a port forward's category also goes to its linked filter rule. The exact rule is in the README's [Separators](https://github.com/Silureth/pfopn-convert#separators) section. `--no-separator-categories` turns this off. Before, the separators were copied into a section OPNsense ignores.
+- `scan` lists the DNS Resolver (`unbound`) and remote syslog (`syslog`) of a pfSense config as supported; it asked for a manual review although `convert` converts both.
+- Release archives contain the `LICENSE` file next to the binary, as the original project's BSD license requires.
+- The README is shorter: the fix list, the tested migrations and the command reference moved to `docs/`, and the README and `docs/` now only describe this fork (the original tool's other commands and its OPNsense → pfSense direction are left to the original project's README), says which areas were used in a production migration, and credits the original project in detail.
+
 ## v0.3.0 (2026-11-11)
 
 VPN conversions, checked against pfSense's and OPNsense 26.7.8's code, and fixes from a second production migration: a pfSense box with an OpenVPN server (LDAP users), two IKEv2 site-to-site tunnels and a Zabbix proxy, converted to OPNsense 26.7.8 and verified live (see [Tested migration](https://github.com/Silureth/pfopn-convert#tested-migration)). OPNsense 26.7 only runs legacy OpenVPN servers and IPsec tunnels with the os-openvpn-legacy / os-strongswan-legacy plugins, so both are now converted completely and the legacy copies removed.
