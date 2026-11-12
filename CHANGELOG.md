@@ -1,12 +1,22 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 (2026-11-12)
 
-- Values pfSense stores in CDATA (LDAP bind DN and password, base DN, extended query, user names, passwords, ...) are HTML-decoded once, as pfSense's own config reader does. Before, a bind password with `<`, `>`, `&` or `"` arrived encoded (`&lt;`), and LDAP logins failed with "Invalid credentials". Check LDAP logins on boxes migrated with earlier versions; re-entering the bind password fixes them.
-- `docs/tested-migrations.md` and the README describe a third production migration (two WANs, SNMP, pfBlockerNG IP lists, separators, a static route).
-- README workflow: check URL table aliases after the first boot on the real network; their first download can fail before DNS works, and OPNsense only retries after the refresh interval.
+Fixes from a third production migration (two WANs, OpenVPN with LDAP, IPsec, SNMP, pfBlockerNG IP lists, separators). The most important one: LDAP bind passwords with special characters arrived encoded.
+
+### Fixes
+
+- Values pfSense stores in CDATA (LDAP bind DN and password, base DN, extended query, user names, passwords, ...) are HTML-decoded once, as pfSense's own config reader does. Before, a bind password with `<`, `>`, `&` or `"` arrived encoded (`&lt;`), and LDAP logins (OpenVPN, GUI) failed with "Invalid credentials". **Check LDAP logins on boxes migrated with earlier versions**; entering the bind password again under System > Access > Servers fixes them.
 - reply-to: on the default gateway's interface, rules whose source cannot be resolved (host names, URL tables) get "Disable reply-to" instead of a warning. Without reply-to their replies take the default route, which is the same gateway, or go directly to hosts in the subnet, as on pfSense. Not done when default gateway switching is on.
+
+### Conversion
+
 - pfSense's SNMP daemon is converted to the `os-net-snmp` plugin when it is installed in the baseline: community, location, contact and bind address. A warning lists the pfSense MIB modules Net-SNMP has no equivalent for (pf, netgraph, regex). `scan` and `verify` know the plugin.
+
+### Documentation
+
+- `docs/tested-migrations.md` and the README describe the third production migration.
+- README workflow: check URL table aliases after the first boot on the real network; their first download can fail before DNS works, and OPNsense only retries after the refresh interval.
 
 ## v0.4.0 (2026-11-12)
 
