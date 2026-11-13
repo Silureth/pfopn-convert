@@ -243,9 +243,10 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub legacy_rules: bool,
     /// Point pfBlockerNG IP aliases (pfB_*_v4/_v6) at their original feed URLs
-    /// instead of pfBlockerNG's local endpoint, which does not exist on OPNsense.
-    /// Dead feeds are skipped. Off by default: once the aliases fill, the
-    /// pfBlockerNG block/reject rules that use them take effect.
+    /// instead of pfBlockerNG's local endpoint, which does not exist on OPNsense,
+    /// turn its GeoIP aliases into OPNsense GeoIP aliases, and its DNSBL into an
+    /// Unbound DNS blocklist. Dead feeds are skipped. Off by default: once the
+    /// aliases fill, the pfBlockerNG block/reject rules that use them take effect.
     #[arg(long)]
     pub pfblocker_feeds: bool,
     /// Don't turn pfSense's rule and port-forward separators into OPNsense rule

@@ -42,13 +42,13 @@ The order used for the tested migrations:
    pfopn-convert verify converted.xml --to opnsense --strict
    ```
 
-   Read every `info:` and `warning:` line `convert` prints and its `plugins:` report: they list everything that was converted differently, kept in the old format, or dropped. Options: `--pfblocker-feeds` for pfBlockerNG IP lists (see [Known limitations](#known-limitations)), `--legacy-rules` to keep the old rule format (see [OPNsense 26.7 targets](#opnsense-267-targets)), `--no-separator-categories` to drop separators instead of converting them (see [Separators](#separators)).
+   Read every `info:` and `warning:` line `convert` prints and its `plugins:` report: they list everything that was converted differently, kept in the old format, or dropped. Options: `--pfblocker-feeds` for pfBlockerNG IP lists, GeoIP and DNSBL (see [Known limitations](#known-limitations)), `--legacy-rules` to keep the old rule format (see [OPNsense 26.7 targets](#opnsense-267-targets)), `--no-separator-categories` to drop separators instead of converting them (see [Separators](#separators)).
 6. Restore the output **while only an isolated network is connected**: it carries the source's IP addresses. Disconnect (or move) every other port first.
 7. After the reboot, check the ruleset from the shell: `pfctl -nf /tmp/rules.debug`. A single invalid line stops pf from loading the whole ruleset, and the GUI only shows the first error.
 8. Check the GUI (rules, NAT, gateways, VPNs, services). If something is wrong, roll back to the snapshot, fix, convert again.
 9. Cut over: shut the source down and move the destination's ports to the real networks. Copying the source's MAC addresses keeps upstream ARP caches working; then never run both at once.
 10. After the first boot on the real networks, **reset the firewall states** once (Diagnostics → States → Reset, or `pfctl -F states`). Devices that send UDP without pause (syslog, NetFlow, SNMP traps) can create states while the boot ruleset is still active, before the port forwards load. Those states never expire while the traffic continues, so the forward is never applied: the packets go to the firewall itself and are dropped, and restarting the sender doesn't help. To clear single senders: `pfctl -k <sender-ip>`.
-11. Check the URL table aliases (pfBlockerNG lists with `--pfblocker-feeds`, or your own): `pfctl -t <alias> -T show | wc -l` must not be 0. Their first download can run at boot before DNS works, and OPNsense only tries again when the alias's refresh interval runs out (up to a day). To fetch them now, delete the alias's files in `/var/db/aliastables/` (`<alias>.txt`, `<alias>.self.txt`, `<alias>.md5.txt`) and run `configctl filter refresh_aliases`.
+11. Check the URL table and GeoIP aliases (pfBlockerNG lists with `--pfblocker-feeds`, or your own): `pfctl -t <alias> -T show | wc -l` must not be 0. Their first download can run at boot before DNS works, and OPNsense only tries again when the alias's refresh interval runs out (up to a day). To fetch them now, delete the alias's files in `/var/db/aliastables/` (`<alias>.txt`, `<alias>.self.txt`, `<alias>.md5.txt`) and run `configctl filter refresh_aliases`. A converted DNSBL has the same problem: run `configctl unbound dnsbl`, then `cat /var/unbound/data/dnsbl.size` must not be 0.
 12. Check the VPNs: site-to-site tunnels come up, VPN clients can log in. If the VPN peers cannot be reached from the isolated network in step 6, this is only possible after the cutover; keep the old firewall ready to start again.
 
 ## Tested migration
@@ -101,7 +101,7 @@ pfSense packages map to OPNsense plugins. A plugin's settings can only be conver
 | OpenVPN Client Export | built in (VPN → OpenVPN → Client Export) | nothing to convert |
 | node_exporter | `os-node_exporter` | enabled, listen interface (as its IP address), port, collectors. `boottime`, `textfile` and extra flags have no equivalent. |
 | Shellcmd `service qemu-guest-agent start` | `os-qemu-guest-agent` | enabled. Other Shellcmd commands are listed; use `/usr/local/etc/rc.syshook.d/` scripts. |
-| pfBlockerNG | none | DNSBL not converted, use Unbound DNS blocklists. IP lists: with `--pfblocker-feeds`, their `pfB_*` aliases download the original feeds |
+| pfBlockerNG | none | with `--pfblocker-feeds`: IP lists download their original feeds, GeoIP lists become GeoIP aliases, DNSBL becomes an Unbound DNS blocklist (see [Known limitations](#known-limitations)) |
 
 After `convert`, a `plugins:` report lists each plugin as `converted`, `NOT INSTALLED` (not in the baseline, settings not converted) or `no equivalent`. The plugins the source needs are also added to the configured-plugin list (`system/firmware/plugins`), so after a restore OPNsense shows missing ones under System → Firmware → Plugins and can install them.
 
@@ -159,7 +159,7 @@ pfSense → OPNsense, by area. "Used live" means the area was in one of the thre
 | Tailscale | yes (the original converter's code, unchanged) | no |
 | Zabbix agent and proxy, node_exporter, QEMU guest agent | when the plugin is installed in the baseline (see [Plugins](#plugins)) | yes |
 | SNMP | to `os-net-snmp`, when the plugin is installed in the baseline (see [Plugins](#plugins)) | starts and listens; not polled (unused on the tested box) |
-| pfBlockerNG | IP lists only, with `--pfblocker-feeds`; DNSBL and its floating rules are not | yes (IP lists) |
+| pfBlockerNG | IP lists, GeoIP lists and DNSBL, with `--pfblocker-feeds`; its floating rules are not | yes (IP lists) |
 | Rule and port-forward separators | as categories (see [Separators](#separators)) | restored, not checked in the GUI |
 | Other packages | no; `scan` and `convert` list them | |
 
@@ -170,7 +170,8 @@ Versions:
 
 ### Known limitations
 
-- **pfBlockerNG** is not converted. Its floating rules are removed. Its IP lists become `pfB_<list>_v4|v6` URL table aliases that download from pfBlockerNG on the pfSense box (`https://127.0.0.1/pfblockerng/pfblockerng.php?...`), so on OPNsense they stay empty and the interface rules that use them match nothing (a warning is printed). With `--pfblocker-feeds`, each alias gets the feed URLs of its list instead and refreshes on the list's schedule. Disabled rows, GeoIP/ASN sources, gzip files and feeds known to be dead are skipped, and DShield and Spamhaus EDROP are swapped for their current URLs; each change is printed. An alias left without a feed is disabled. This is opt-in because the block rules start blocking once the aliases fill. The DNSBL part (Unbound Python module) is not converted; set up Services → Unbound DNS → Blocklist.
+- **pfBlockerNG** is not converted. Its floating rules are removed. Its IP lists become `pfB_<list>_v4|v6` URL table aliases that download from pfBlockerNG on the pfSense box (`https://127.0.0.1/pfblockerng/pfblockerng.php?...`), so on OPNsense they stay empty and the interface rules that use them match nothing (a warning is printed). With `--pfblocker-feeds`, each alias gets the feed URLs of its list instead and refreshes on the list's schedule. Disabled rows, GeoIP/ASN sources, gzip files and feeds known to be dead are skipped, and DShield and Spamhaus EDROP are swapped for their current URLs; each change is printed. An alias left without a feed is disabled. GeoIP lists (`pfB_Asia_v4` and so on) become OPNsense GeoIP aliases with the same countries (`CN_rep` counts as `CN`; proxy/satellite codes are dropped), and the GeoIP download URL is set from pfBlockerNG's MaxMind license key. This is opt-in because the block rules start blocking once the aliases fill.
+- **pfBlockerNG DNSBL** becomes one Unbound DNS blocklist policy for all clients with `--pfblocker-feeds` (Services → Unbound DNS → Blocklist): the feed URLs of its enabled groups, its suppression list as allowlist patterns (`.example.com` also allows subdomains), and the groups' custom domains. A daily (or hourly, as pfBlockerNG's schedule) cron job "Update Unbound DNSBLs" refreshes the lists. OPNsense reads only hosts files and plain domain lists, so adblock-format EasyList and EasyPrivacy are replaced by OPNsense's predefined copies; dead feeds are skipped, each change is printed. Blocked names resolve to 0.0.0.0 instead of pfBlockerNG's block page, whose virtual IP (10.10.10.1 on lo0) and port alias are removed. TLD blocking, SafeSearch and DNSBL categories are not converted (warnings).
 - **pfSense `match` and NAT64 rules** stay in the old rule format on 26.7 targets (still enforced, not editable in the GUI).
 - **Limiters, queues, OS fingerprint and DSCP** settings on rules are dropped (a warning is printed for each).
 - **1:1 NAT with a dynamic external address** (`wanip` and similar) is skipped.
@@ -180,7 +181,7 @@ Versions:
 - **OpenVPN:** clients and shared-key servers are not converted (they stay in the legacy section; warnings). Custom options, NetBIOS/WINS, compression and per-client connection limits have no instance setting (warnings).
 - **Kea client IDs** from pfSense static mappings are not transferred.
 - **pfSense-only `system` settings** (for example `earlyshellcmd`, `pkg_repo_conf_path`) are carried over; OPNsense ignores them. pfSense's NTP pool (`*.pfsense.pool.ntp.org`) is replaced by OPNsense's.
-- **DNS Resolver:** custom options, the Python module (pfBlockerNG DNSBL) and the DNS over TLS service for clients are not converted (warnings are printed).
+- **DNS Resolver:** custom options, the Python module and the DNS over TLS service for clients are not converted (warnings are printed). pfBlockerNG's own include line in the custom options is dropped silently.
 - **Remote syslog:** pfSense's per-category selection becomes "all programs" (a warning is printed); the source address is not converted.
 - **Accented letters lost by pfSense:** pfSense stores some accented letters that are not in Latin-1 (for example Hungarian ő and ű) as a plain `?`, so a separator "Külsők" is "Kuls?k" in the backup, and the letter cannot be recovered from it. `convert` warns about every description, separator text and alias detail with a `?` between two letters. Fix them on pfSense or in the exported XML before converting, or in OPNsense after the restore.
 - **Shellcmd** commands other than starting the QEMU guest agent are not converted; use `/usr/local/etc/rc.syshook.d/` scripts.

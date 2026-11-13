@@ -26,7 +26,7 @@ pfopn-convert convert source-pfsense.xml --from pfsense --to opnsense \
 
 - Interfaces are matched by their logical names (`wan`, `lan`, `opt1`, …). The baseline decides the device names (`igb0` on the source can become `vtnet0`). `convert` stops if an interface the source needs is not assigned in the baseline; VLAN, WireGuard and OpenVPN interfaces are created from the source.
 - `info:` and `warning:` lines list everything that was converted differently, kept in the old format or dropped. A `plugins:` report lists each package as `converted`, `NOT INSTALLED` (not in the baseline, settings not converted) or `no equivalent`.
-- `--pfblocker-feeds`: points pfBlockerNG's `pfB_*` IP aliases at the original feed URLs (see [Known limitations](../README.md#known-limitations)).
+- `--pfblocker-feeds`: points pfBlockerNG's `pfB_*` IP aliases at the original feed URLs, turns its GeoIP aliases into OPNsense GeoIP aliases and its DNSBL into an Unbound DNS blocklist (see [Known limitations](../README.md#known-limitations)).
 - `--legacy-rules`: on OPNsense 26.7+ baselines, keeps firewall and outbound NAT rules in the old format instead of the new rule model (see [OPNsense 26.7 targets](../README.md#opnsense-267-targets)).
 - `--no-separator-categories`: drops pfSense's rule and port-forward separators instead of turning them into rule categories (see [Separators](../README.md#separators)).
 - DHCP is switched on for an interface only if the source has it on. On OPNsense 26.x baselines, ISC DHCP is converted to Kea; pfSense client IDs are not transferred to Kea reservations (the MAC address is used).

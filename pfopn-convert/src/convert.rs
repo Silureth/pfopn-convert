@@ -50,8 +50,8 @@ use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     auth_servers, bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
     interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, openvpn, opn_plugins,
-    opnsense_assignments, pfblocker, reply_to, rule_flags, separators, syslog_mvc, unbound_mvc,
-    vlan_ifnames, wireguard,
+    opnsense_assignments, pfblocker, pfblocker_dnsbl, reply_to, rule_flags, separators, syslog_mvc,
+    unbound_mvc, vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -396,6 +396,14 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
             for (name, count) in &feeds.rewritten {
                 eprintln!("info: pointed pfBlockerNG alias {name} at {count} feed URL(s)");
             }
+            for (name, codes) in &feeds.geoip {
+                eprintln!("info: converted pfBlockerNG GeoIP alias {name} to an OPNsense GeoIP alias ({codes})");
+            }
+            if feeds.geoip_url_set {
+                eprintln!(
+                    "info: set the GeoIP download URL (Firewall > Aliases > GeoIP settings) from pfBlockerNG's MaxMind license key"
+                );
+            }
             for warning in &feeds.warnings {
                 eprintln!("warning: {warning}");
             }
@@ -414,6 +422,46 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
                     } else {
                         "; use --pfblocker-feeds to point them at the original feed URLs"
                     }
+                );
+            }
+            let removed = pfblocker_dnsbl::remove_dnsbl_leftovers(&mut out, &input);
+            if !removed.is_empty() {
+                eprintln!(
+                    "info: removed pfBlockerNG DNSBL leftovers (its block page web server does not exist on OPNsense): {}",
+                    removed.join(", ")
+                );
+            }
+            let dnsbl = pfblocker_dnsbl::to_unbound_blocklist(
+                &mut out,
+                &input,
+                &target,
+                args.pfblocker_feeds,
+            );
+            if dnsbl.present && !args.pfblocker_feeds {
+                eprintln!(
+                    "warning: pfBlockerNG DNSBL not converted; use --pfblocker-feeds to turn it into an Unbound DNS blocklist"
+                );
+            }
+            for warning in &dnsbl.warnings {
+                eprintln!("warning: {warning}");
+            }
+            if !dnsbl.groups.is_empty() && (dnsbl.feeds > 0 || !dnsbl.predefined.is_empty()) {
+                eprintln!(
+                    "info: converted pfBlockerNG DNSBL group(s) {} to one Unbound DNS blocklist: {} feed URL(s){}, {} allowlist and {} custom block entr(ies)",
+                    dnsbl.groups.join(", "),
+                    dnsbl.feeds,
+                    if dnsbl.predefined.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", predefined {}", dnsbl.predefined.join(", "))
+                    },
+                    dnsbl.allowlist,
+                    dnsbl.blocklist
+                );
+            }
+            if let Some(cron) = &dnsbl.cron {
+                eprintln!(
+                    "info: added cron job \"Update Unbound DNSBLs\" ({cron}) to refresh the blocklist as pfBlockerNG did"
                 );
             }
         }

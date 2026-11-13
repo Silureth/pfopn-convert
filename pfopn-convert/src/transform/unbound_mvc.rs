@@ -192,6 +192,13 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
     // --- not convertible ----------------------------------------------------
     let custom =
         decode_base64(&text(src, "custom_options")).unwrap_or_else(|| text(src, "custom_options"));
+    // pfBlockerNG's DNSBL adds an include of its own zone files; it has no
+    // meaning on OPNsense (DNSBL is converted separately).
+    let custom: String = custom
+        .lines()
+        .filter(|l| !(l.contains("include:") && l.contains("pfb_")))
+        .collect::<Vec<_>>()
+        .join("\n");
     if !custom.trim().is_empty() {
         stats.warnings.push(
             "DNS Resolver: custom options not converted; put them in a .conf file under /usr/local/etc/unbound.opnsense.d/".to_string(),
@@ -505,6 +512,26 @@ mod tests {
         assert!(stats.warnings.iter().any(|w| w.contains("_vip5e8a")));
         assert!(stats.warnings.iter().any(|w| w.contains("pfBlockerNG")));
         assert!(stats.warnings.iter().any(|w| w.contains("bad_name")));
+    }
+
+    #[test]
+    fn pfblocker_include_is_not_a_custom_option() {
+        let baseline = parse(BASELINE).expect("parse");
+        let custom = |opts: &str| {
+            let mut out = baseline.clone();
+            let xml = format!(
+                "<pfsense><unbound><enable></enable><custom_options>{opts}</custom_options></unbound></pfsense>"
+            );
+            let source = parse(xml.as_bytes()).expect("parse");
+            from_pfsense(&mut out, &source, &baseline)
+                .warnings
+                .iter()
+                .any(|w| w.contains("custom options"))
+        };
+        assert!(!custom("server:include: /var/unbound/pfb_dnsbl.*conf"));
+        assert!(custom(
+            "server:include: /var/unbound/pfb_dnsbl.*conf\nserver:\n  do-ip6: no"
+        ));
     }
 
     #[test]

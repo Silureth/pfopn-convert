@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Conversion
+
+- pfBlockerNG DNSBL becomes an Unbound DNS blocklist with `--pfblocker-feeds`: feeds of the enabled groups (dead ones skipped, adblock-format EasyList/EasyPrivacy replaced by OPNsense's predefined lists), the suppression list as anchored allowlist patterns, custom domains, and a cron job "Update Unbound DNSBLs" on pfBlockerNG's schedule. Without the switch a warning says it was not converted.
+- pfBlockerNG GeoIP aliases (`pfB_Asia_v4`, ...) become OPNsense GeoIP aliases with `--pfblocker-feeds`; the GeoIP download URL is set from pfBlockerNG's MaxMind license key. Before, they stayed empty URL tables and their rules matched nothing.
+- pfBlockerNG's DNSBL virtual IP (10.10.10.1 on lo0) and `pfB_DNSBL_*` port alias are removed; its include line in the Unbound custom options no longer causes a warning.
+
 ## v0.5.0 (2026-11-12)
 
 Fixes from a third production migration (two WANs, OpenVPN with LDAP, IPsec, SNMP, pfBlockerNG IP lists, separators). The most important one: LDAP bind passwords with special characters arrived encoded.

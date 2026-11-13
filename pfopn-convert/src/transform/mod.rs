@@ -20,6 +20,7 @@ pub mod openvpn;
 pub mod opn_plugins;
 pub mod opnsense_assignments;
 pub mod pfblocker;
+pub mod pfblocker_dnsbl;
 pub mod ppps;
 pub mod reply_to;
 pub mod rule_flags;

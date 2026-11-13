@@ -119,7 +119,7 @@ pub fn from_pfsense(out: &mut XmlNode, source: &XmlNode, baseline: &XmlNode) -> 
             convert_shellcmds(out, baseline, packages, &name, &mut report);
         } else if key.contains("pfblocker") {
             report.no_equivalent.push(format!(
-                "{name}: no OPNsense plugin; use Unbound DNS blocklists (Services > Unbound DNS > Blocklist) and URL table aliases"
+                "{name}: no OPNsense plugin; with --pfblocker-feeds its IP lists, GeoIP lists and DNSBL become URL table aliases, GeoIP aliases and an Unbound DNS blocklist"
             ));
         } else if !HANDLED_ELSEWHERE.iter().any(|h| key.contains(h)) {
             report.no_equivalent.push(format!(

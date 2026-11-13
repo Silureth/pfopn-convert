@@ -144,6 +144,10 @@ pub struct FeedAliasReport {
     pub disabled: Vec<String>,
     /// Per-feed notes: dropped or replaced URLs, unmatched lists.
     pub warnings: Vec<String>,
+    /// GeoIP aliases converted to OPNsense GeoIP aliases: (name, countries).
+    pub geoip: Vec<(String, String)>,
+    /// The GeoIP download URL was set from pfBlockerNG's MaxMind license key.
+    pub geoip_url_set: bool,
 }
 
 /// pfBlockerNG's IP lists become URL table aliases that download from
@@ -184,6 +188,25 @@ pub fn rewrite_feed_aliases_for_opnsense(
             .trim()
             .to_string();
         let Some(list) = find_pfblocker_list(source, &feed_alias) else {
+            if let Some((codes, dropped, v6)) = find_geoip_countries(source, &feed_alias) {
+                if !dropped.is_empty() {
+                    report.warnings.push(format!(
+                        "{name}: GeoIP code(s) {} have no OPNsense equivalent; dropped",
+                        dropped.join(", ")
+                    ));
+                }
+                if codes.is_empty() {
+                    set_child_text(alias, "enabled", "0");
+                    report.disabled.push(name);
+                    continue;
+                }
+                set_child_text(alias, "type", "geoip");
+                set_child_text(alias, "proto", if v6 { "IPv6" } else { "IPv4" });
+                set_child_text(alias, "content", &codes.join("\n"));
+                set_child_text(alias, "updatefreq", "");
+                report.geoip.push((name, codes.join(",")));
+                continue;
+            }
             report.warnings.push(format!(
                 "{name}: no pfBlockerNG IP list found for {feed_alias}; left unchanged"
             ));
@@ -233,7 +256,106 @@ pub fn rewrite_feed_aliases_for_opnsense(
         }
         report.rewritten.push((name, feeds.len()));
     }
+    if !report.geoip.is_empty() {
+        set_geoip_url(out, source, &mut report);
+    }
     report
+}
+
+/// pfBlockerNG's GeoIP aliases (`pfB_<region>_v4|v6`) and the package
+/// section that holds their countries.
+const GEOIP_SECTIONS: &[(&str, &str)] = &[
+    ("africa", "pfblockerngafrica"),
+    ("antarctica", "pfblockerngantarctica"),
+    ("asia", "pfblockerngasia"),
+    ("europe", "pfblockerngeurope"),
+    ("namerica", "pfblockerngnorthamerica"),
+    ("northamerica", "pfblockerngnorthamerica"),
+    ("oceania", "pfblockerngoceania"),
+    ("samerica", "pfblockerngsouthamerica"),
+    ("southamerica", "pfblockerngsouthamerica"),
+    ("ps", "pfblockerngproxyandsatellite"),
+    ("proxyandsatellite", "pfblockerngproxyandsatellite"),
+    ("top", "pfblockerngtopspammers"),
+    ("topspammers", "pfblockerngtopspammers"),
+];
+
+/// Countries of a pfBlockerNG GeoIP alias: (ISO codes OPNsense knows,
+/// dropped codes, is IPv6). pfBlockerNG's `XX_rep` ("represented by") codes
+/// fold into `XX`: OPNsense's GeoIP alias has no such distinction.
+fn find_geoip_countries(
+    source: &XmlNode,
+    feed_alias: &str,
+) -> Option<(Vec<String>, Vec<String>, bool)> {
+    let lower = feed_alias.to_ascii_lowercase();
+    let (stem, v6) = match lower.strip_suffix("_v4") {
+        Some(stem) => (stem, false),
+        None => (lower.strip_suffix("_v6")?, true),
+    };
+    let stem = stem.strip_prefix("pfb_").unwrap_or(stem);
+    let section = GEOIP_SECTIONS.iter().find(|(s, _)| *s == stem)?.1;
+    let config = node_at(source, &["installedpackages", section, "config"])?;
+    let raw = text(config, if v6 { "countries6" } else { "countries4" });
+    let mut codes: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        let code = token
+            .strip_suffix("_rep")
+            .unwrap_or(token)
+            .to_ascii_uppercase();
+        let is_country = code.len() == 2
+            && code.chars().all(|c| c.is_ascii_uppercase())
+            && !matches!(code.as_str(), "A1" | "A2" | "O1");
+        if !is_country {
+            dropped.push(token.to_string());
+        } else if !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    Some((codes, dropped, v6))
+}
+
+/// OPNsense downloads GeoIP data from the URL in Firewall > Aliases > GeoIP
+/// settings. Fill it from pfBlockerNG's MaxMind license key when it is empty.
+fn set_geoip_url(out: &mut XmlNode, source: &XmlNode, report: &mut FeedAliasReport) {
+    let key = node_at(
+        source,
+        &["installedpackages", "pfblockerngipsettings", "config"],
+    )
+    .map(|c| text(c, "maxmind_key"))
+    .unwrap_or_default();
+    let Some(alias_model) = child_mut(out, "OPNsense")
+        .and_then(|o| child_mut(o, "Firewall"))
+        .and_then(|f| child_mut(f, "Alias"))
+    else {
+        return;
+    };
+    let current = alias_model
+        .get_child("geoip")
+        .map(|g| text(g, "url"))
+        .unwrap_or_default();
+    if !current.is_empty() {
+        return;
+    }
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        report.warnings.push(
+            "GeoIP aliases need a download URL: set Firewall > Aliases > GeoIP settings (MaxMind GeoLite2-Country-CSV with your license key)".to_string(),
+        );
+        return;
+    }
+    let url = format!(
+        "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key={key}&suffix=zip"
+    );
+    let geoip = match alias_model.children.iter().position(|c| c.tag == "geoip") {
+        Some(idx) => &mut alias_model.children[idx],
+        None => {
+            alias_model.children.insert(0, XmlNode::new("geoip"));
+            &mut alias_model.children[0]
+        }
+    };
+    geoip.text = None;
+    set_child_text(geoip, "url", &url);
+    report.geoip_url_set = true;
 }
 
 enum FeedStatus {
@@ -464,6 +586,45 @@ mod tests {
             .get_text(&["content"])
             .unwrap_or("")
             .contains("pfblockerng.php"));
+    }
+
+    #[test]
+    fn geoip_aliases_become_opnsense_geoip_aliases() {
+        let source = parse(
+            br#"<pfsense><installedpackages>
+                <pfblockerngipsettings><config><maxmind_key>Abc123</maxmind_key></config></pfblockerngipsettings>
+                <pfblockerngasia><config><countries4>CN,CN_rep,A1</countries4><countries6></countries6></config></pfblockerngasia>
+            </installedpackages></pfsense>"#,
+        )
+        .expect("parse");
+        let mut out = parse(
+            br#"<opnsense><OPNsense><Firewall><Alias><geoip><url/></geoip><aliases>
+                <alias><enabled>1</enabled><name>pfB_Asia_v4</name><type>urltable</type><updatefreq>32</updatefreq><content>https://127.0.0.1:443/pfblockerng/pfblockerng.php?pfb=pfB_Asia_v4</content></alias>
+                <alias><enabled>1</enabled><name>pfB_Asia_v6</name><type>urltable</type><updatefreq>32</updatefreq><content>https://127.0.0.1:443/pfblockerng/pfblockerng.php?pfb=pfB_Asia_v6</content></alias>
+            </aliases></Alias></Firewall></OPNsense></opnsense>"#,
+        )
+        .expect("parse");
+        let report = rewrite_feed_aliases_for_opnsense(&mut out, &source, true);
+
+        let asia = alias(&out, "pfB_Asia_v4");
+        assert_eq!(asia.get_text(&["type"]), Some("geoip"));
+        assert_eq!(asia.get_text(&["content"]), Some("CN"));
+        assert_eq!(asia.get_text(&["proto"]), Some("IPv4"));
+        assert_eq!(asia.get_text(&["enabled"]), Some("1"));
+        assert_eq!(alias(&out, "pfB_Asia_v6").get_text(&["enabled"]), Some("0"));
+        assert_eq!(
+            report.geoip,
+            vec![("pfB_Asia_v4".to_string(), "CN".to_string())]
+        );
+        assert!(report.warnings.iter().any(|w| w.contains("A1")));
+        assert!(report.geoip_url_set);
+        let url = out
+            .get_child("OPNsense")
+            .and_then(|n| n.get_child("Firewall"))
+            .and_then(|n| n.get_child("Alias"))
+            .and_then(|n| n.get_text(&["geoip", "url"]))
+            .unwrap_or("");
+        assert!(url.contains("GeoLite2-Country-CSV") && url.contains("license_key=Abc123"));
     }
 
     #[test]
