@@ -13,7 +13,7 @@ Converts a pfSense CE config backup into an OPNsense 26.7 config that can be res
 
 ## Install
 
-Prebuilt binaries for Linux (x86_64, aarch64), FreeBSD, macOS and Windows are on the [Releases](https://github.com/Silureth/pfopn-convert/releases) page, with a `SHA256SUMS` file. Changes per version are in [CHANGELOG.md](CHANGELOG.md).
+Prebuilt binaries for Linux (x86_64, aarch64), FreeBSD, macOS and Windows are on the [Releases](https://github.com/Silureth/pfopn-convert/releases) page, with a `SHA256SUMS` file. The FreeBSD binary runs on OPNsense itself, for the [on-box wizard](#on-box-wizard). Changes per version are in [CHANGELOG.md](CHANGELOG.md).
 
 To build from source, you need a Rust toolchain (for example via [rustup](https://rustup.rs)):
 
@@ -27,10 +27,10 @@ The binary is `target/release/pfopn-convert`.
 
 `convert` takes two config exports: the **source** (the pfSense box) and a **baseline** (a fresh OPNsense install of the version you will run). It writes the source's settings into the baseline, so the output carries OPNsense's model versions and installed plugins.
 
-The order used for the tested migrations:
+These steps run the conversion on a workstation; the [on-box wizard](#on-box-wizard) runs steps 1–6 as a menu on the new OPNsense box instead. The order used for the tested migrations:
 
 1. Install OPNsense in the **exact version** you will run, and update it fully. Don't configure anything else on it: existing interfaces, bridges or gateways in the baseline can conflict with the converted ones.
-2. Give it one network port per source interface, **in the same order**, and assign them all (`wan`, `lan`, `opt1`, …, including interfaces that are disabled on the source). Interfaces are matched by these names, not by device names (`igb0` on the source can become `vtnet0`); `convert` stops if one is missing from the baseline. Skip the setup wizard.
+2. Give it one network port per source interface, **in the same order**, and assign them all (`wan`, `lan`, `opt1`, …, including interfaces that are disabled on the source). Interfaces are matched by these names, not by device names (`igb0` on the source can become `vtnet0`); `convert` stops if one is missing from the baseline. Skip OPNsense's setup wizard.
 3. Install the OPNsense plugins the source needs (see [Plugins](#plugins)), without configuring them.
 4. Export this config as the baseline, and take a snapshot (or a config backup) to roll back to.
 5. Convert and check:
@@ -50,6 +50,47 @@ The order used for the tested migrations:
 10. After the first boot on the real networks, **reset the firewall states** once (Diagnostics → States → Reset, or `pfctl -F states`). Devices that send UDP without pause (syslog, NetFlow, SNMP traps) can create states while the boot ruleset is still active, before the port forwards load. Those states never expire while the traffic continues, so the forward is never applied: the packets go to the firewall itself and are dropped, and restarting the sender doesn't help. To clear single senders: `pfctl -k <sender-ip>`.
 11. Check the URL table and GeoIP aliases (pfBlockerNG lists with `--pfblocker-feeds`, or your own): `pfctl -t <alias> -T show | wc -l` must not be 0. Their first download can run at boot before DNS works, and OPNsense only tries again when the alias's refresh interval runs out (up to a day). To fetch them now, delete the alias's files in `/var/db/aliastables/` (`<alias>.txt`, `<alias>.self.txt`, `<alias>.md5.txt`) and run `configctl filter refresh_aliases`. A converted DNSBL has the same problem: run `configctl unbound dnsbl`, then `cat /var/unbound/data/dnsbl.size` must not be 0.
 12. Check the VPNs: site-to-site tunnels come up, VPN clients can log in. If the VPN peers cannot be reached from the isolated network in step 6, this is only possible after the cutover; keep the old firewall ready to start again.
+
+## On-box wizard
+
+`pfopn-convert wizard` does steps 1–6 of the [migration workflow](#migration-workflow) as a text menu on the new OPNsense box, in the style of the pfSense and OPNsense installers. The box's own live config is the baseline, so there is no baseline export and no copying files between the box and a workstation. The firmware update, plugin install and restore are done by OPNsense's own commands.
+
+> Status: tested on an OPNsense 26.7.8 box up to convert and verify. The restore step has not been run on a box yet; the [workflow above](#migration-workflow) is the tested path.
+
+You need the FreeBSD binary (`pfopn-convert-freebsd-x86_64.tar.gz` from [Releases](https://github.com/Silureth/pfopn-convert/releases)) and the pfSense config backup.
+
+1. Install OPNsense. In console option 1, assign a port to every pfSense interface (`wan`, `lan`, `opt1`, …, including disabled ones), and give one port internet access. The wizard checks the assignment but does not change it.
+2. Put the binary and the config on a medium. For a virtual machine, build an ISO and attach it as a second CD drive:
+
+   ```bash
+   tar -xzf pfopn-convert-freebsd-x86_64.tar.gz
+   tools/make_media.sh -o pfopn.iso pfopn-convert config-pfsense.xml
+   ```
+
+   `make_media.sh` needs `xorriso`, `genisoimage` or `mkisofs`; without the repository, `xorriso -as mkisofs -J -R -V PFOPN -o pfopn.iso <folder>` does the same. A FAT32 USB stick with the two files, or `scp` to `/root/`, works too (see [docs/wizard.md](docs/wizard.md#getting-the-files-onto-the-box)).
+3. On the box's console, open the shell (option 8) and start the wizard from the medium:
+
+   ```sh
+   mount_cd9660 /dev/cd1 /mnt     # cd0 is usually the installer; ls /dev/cd* to check
+   /mnt/pfopn-convert wizard
+   ```
+
+   It copies itself and the config to `/root/pfopn-convert/` and continues from there, so the medium can be removed. After a reboot (a firmware update can reboot the box), start it again with `/root/pfopn-convert/pfopn-convert wizard`.
+4. Go through the menu in order. Each entry shows its state:
+
+   | Entry | What it does |
+   |---|---|
+   | 1. System check | OPNsense version, internet access, source summary, and every source interface next to the port assigned to it |
+   | 2. Update OPNsense | OPNsense's console update (`opnsense-shell firmware`, console option 12) |
+   | 3. Plugins | installs the plugins the source needs (see [Plugins](#plugins)), the same way the GUI does |
+   | 4. Conversion options | `--pfblocker-feeds` (on when pfBlockerNG is in the source), `--legacy-rules`, `--no-separator-categories` |
+   | 5. Convert and verify | `convert` against the box's live config, then `verify`; a summary with the warnings, info lines and verify issues in separate lists |
+   | 6. Restore | a warning screen (network, how to reach the box after the reboot, what was not converted), then OPNsense's console restore (`opnsense-shell restore`, console option 13) with the converted config as the newest backup |
+
+5. **Take a snapshot or backup before entry 6**, in whatever way suits the setup. The wizard asks for confirmation that one exists, but does not make it. Restore only while an isolated network is connected (step 6 of the workflow). The restore can be undone with console option 13 or System → Configuration → History: the config from before the restore is in the backup list.
+6. After the reboot, continue with steps 7–12 of the [workflow](#migration-workflow); the wizard does not do them yet.
+
+Each conversion writes the baseline (a copy of the box's config at that time), the converted config and the convert and verify output to `/root/pfopn-convert/<timestamp>/`. Copy them off the box for a bug report. Design and details: [docs/wizard.md](docs/wizard.md). Options: [docs/commands.md](docs/commands.md#wizard).
 
 ## Tested migration
 
@@ -132,6 +173,7 @@ The rule:
 | [`scan`](docs/commands.md#scan) | readiness report for the source config: platform, version, sections that are converted or need a manual review, packages |
 | [`convert`](docs/commands.md#convert) | builds the OPNsense config from the source and the baseline |
 | [`verify`](docs/commands.md#verify) | checks a converted config before the restore; `--strict` also fails on warnings |
+| [`wizard`](docs/commands.md#wizard) | the [on-box wizard](#on-box-wizard): update, plugins, convert, verify and restore as a menu on the OPNsense box |
 
 Options and checks are in [docs/commands.md](docs/commands.md).
 

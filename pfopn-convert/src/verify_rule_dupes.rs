@@ -56,7 +56,7 @@ pub fn rule_duplicate_findings(root: &XmlNode) -> Vec<VerifyFinding> {
 
     // Report groups with multiple rules
     let mut out = Vec::new();
-    for rows in by_fp.values() {
+    for (fp, rows) in &by_fp {
         if rows.len() < 2 {
             continue; // Not a duplicate, skip
         }
@@ -69,8 +69,10 @@ pub fn rule_duplicate_findings(root: &XmlNode) -> Vec<VerifyFinding> {
                 severity: FindingSeverity::Warning,
                 code: "default_rule_overlap".to_string(),
                 message: format!(
-                    "default rule overlaps custom rule signatures (trackers: {})",
-                    trackers(rows)
+                    "default rule overlaps custom rule{} on {}: {}",
+                    if rows.len() > 2 { "s" } else { "" },
+                    interface_label(fp),
+                    rule_names(rows)
                 ),
             });
             continue;
@@ -81,8 +83,10 @@ pub fn rule_duplicate_findings(root: &XmlNode) -> Vec<VerifyFinding> {
             severity: FindingSeverity::Warning,
             code: "duplicate_firewall_rule".to_string(),
             message: format!(
-                "duplicate firewall rule signature detected (trackers: {})",
-                trackers(rows)
+                "{} rules on {} match the same traffic, only the first one takes effect (several port forwards to the same target cause this): {}",
+                rows.len(),
+                interface_label(fp),
+                rule_names(rows)
             ),
         });
     }
@@ -190,17 +194,31 @@ fn is_default_descr(value: &str) -> bool {
     v.starts_with("default ")
 }
 
-fn trackers(rows: &[RuleMeta]) -> String {
+/// The rules of a group by description, falling back to their tracker (or
+/// position) when they have none.
+fn rule_names(rows: &[RuleMeta]) -> String {
     rows.iter()
         .map(|r| {
-            if r.tracker.is_empty() {
-                format!("idx{}", r.idx)
+            if !r.descr.is_empty() {
+                format!("'{}'", r.descr)
+            } else if !r.tracker.is_empty() {
+                format!("tracker {}", r.tracker)
             } else {
-                r.tracker.clone()
+                format!("rule #{}", r.idx + 1)
             }
         })
         .collect::<Vec<_>>()
-        .join(",")
+        .join(", ")
+}
+
+fn interface_label(fp: &RuleFingerprint) -> String {
+    if fp.floating {
+        "floating".to_string()
+    } else if fp.interface.is_empty() {
+        "(no interface)".to_string()
+    } else {
+        fp.interface.clone()
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +250,13 @@ mod tests {
         )
         .expect("parse");
         let findings = rule_duplicate_findings(&root);
-        assert!(findings.iter().any(|f| f.code == "duplicate_firewall_rule"));
+        let dupe = findings
+            .iter()
+            .find(|f| f.code == "duplicate_firewall_rule")
+            .expect("duplicate reported");
+        assert!(dupe
+            .message
+            .starts_with("2 rules on lan match the same traffic"));
+        assert!(dupe.message.ends_with("'Rule A', 'Rule B'"));
     }
 }

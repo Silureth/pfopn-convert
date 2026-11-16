@@ -28,6 +28,7 @@ mod path_guard;
 mod scan_cmd;
 mod target_prune;
 mod verify_cmd;
+mod wizard;
 
 use cli::{Cli, Command, DiffArgs, InspectArgs, MergeTo, OutputFormat, SectionsArgs};
 
@@ -42,6 +43,7 @@ fn main() -> Result<()> {
         Command::Verify(args) => verify_cmd::run_verify(args),
         Command::MigrateCheck(args) => migrate_check_cmd::run_migrate_check(args),
         Command::Convert(args) => convert::run_convert(args),
+        Command::Wizard(args) => wizard::run_wizard(args),
     }
 }
 

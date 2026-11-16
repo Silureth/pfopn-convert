@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## v0.5.3 (unreleased)
+
+### Wizard
+
+- New `wizard` command: a menu-driven migration on the OPNsense box itself (system check, OPNsense update, plugin install, conversion options, convert + verify, restore through OPNsense's console restore). It copies itself and the pfSense config from a CD/USB medium to `/root/pfopn-convert/`. `tools/make_media.sh` builds the ISO. See [docs/wizard.md](docs/wizard.md). Tested on an OPNsense 26.7.8 box up to convert and verify; the restore step has not been run on a box yet. 0.5.2 fixes the screen not being fully redrawn after OPNsense's update or plugin install, and shows the version and source in the menu. 0.5.3 shows the conversion result as a summary, with the warnings, info lines and verify issues in separate, readable lists.
+
+### Documentation
+
+- README: new [On-box wizard](README.md#on-box-wizard) section (getting the binary and the config onto the box, the menu entries, what stays manual after the restore) and a `wizard` row in the command table. `docs/commands.md` describes the `wizard` options, including trying it on a workstation with `--box-root` and `--dry-run`.
+
+### Verify
+
+- Duplicate-rule warnings name the interface and the rules' descriptions instead of rule UUIDs, and say why it happens (several port forwards to the same target): "2 rules on opt2 match the same traffic, only the first one takes effect ...: 'NAT x HTTP', 'NAT x http 2'".
+
+### Versioning
+
+- Every build given out for testing gets its own patch version. `convert` prints the version first and writes it into the converted config's revision note ("Converted from pfSense by pfopn-convert 0.5.3").
 
 ### Conversion
 

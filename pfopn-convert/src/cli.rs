@@ -26,6 +26,26 @@ pub enum Command {
     MigrateCheck(MigrateCheckArgs),
     /// Convert one config toward a target platform.
     Convert(ConvertArgs),
+    /// Menu-driven migration on the OPNsense box itself (see docs/wizard.md).
+    Wizard(WizardArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct WizardArgs {
+    /// pfSense config to convert (default: the pfSense config(s) in the work directory).
+    pub source: Option<PathBuf>,
+    /// Directory the wizard copies itself and the pfSense config to, and writes its runs into.
+    #[arg(long, default_value = "/root/pfopn-convert")]
+    pub work_dir: PathBuf,
+    /// Root of the OPNsense file system (reads <root>/conf/config.xml); for trying the wizard elsewhere.
+    #[arg(long, default_value = "/")]
+    pub box_root: PathBuf,
+    /// Print OPNsense commands (update, plugin install, restore) instead of running them.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Run from where the binary is, without copying it to the work directory.
+    #[arg(long)]
+    pub no_relocate: bool,
 }
 
 #[derive(Parser, Debug)]

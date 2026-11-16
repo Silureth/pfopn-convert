@@ -1,6 +1,6 @@
 # Command reference
 
-The three commands used for the [tested migrations](tested-migrations.md), for the pfSense → OPNsense direction. For the order of the steps, see the [README](../README.md#migration-workflow).
+The three commands used for the [tested migrations](tested-migrations.md), for the pfSense → OPNsense direction, and the [on-box wizard](#wizard) that runs them on the OPNsense box. For the order of the steps, see the [README](../README.md#migration-workflow).
 
 ## `scan`
 
@@ -59,4 +59,26 @@ Checks this fork added, for problems that OPNsense does not report or only repor
 | `mvc_section_missing_version` | warning | an OPNsense section without a `version` attribute, so OPNsense re-runs all of its migrations at boot |
 | `pfsense_match_rule`, `pfsense_nat64_rule` | warning | pfSense-only rule types that stay in the old format |
 
-`verify` also runs the original tool's checks: missing interface, alias, gateway and schedule references; duplicate interface assignments and rule signatures (`duplicate_firewall_rule` is a warning; on a converted pfSense config it usually means the source had the same rule twice); bridges; NAT interfaces; WireGuard interface assignments; and the expected sections and fields per platform version.
+`verify` also runs the original tool's checks: missing interface, alias, gateway and schedule references; duplicate interface assignments and rule signatures (`duplicate_firewall_rule` is a warning naming the interface and the rules; on a converted pfSense config it usually means the source had the same rule twice, most often the filter rules of several port forwards to the same internal host and port); bridges; NAT interfaces; WireGuard interface assignments; and the expected sections and fields per platform version.
+
+## `wizard`
+
+The [on-box wizard](../README.md#on-box-wizard): a menu on the new OPNsense box that checks the interface assignment, updates OPNsense, installs the plugins, runs `convert` and `verify` with the box's live config as the baseline, and starts OPNsense's console restore. Design and details are in [wizard.md](wizard.md).
+
+```sh
+/mnt/pfopn-convert wizard                      # first start, from the CD or USB stick
+/root/pfopn-convert/pfopn-convert wizard       # later starts, for example after a reboot
+```
+
+- `[SOURCE]`: the pfSense config to convert. Default: the pfSense configs in the work directory, which the first start copies there from next to the binary; with more than one, the wizard asks.
+- `--work-dir <dir>` (default `/root/pfopn-convert`): where the wizard copies itself and the pfSense configs on its first start, and where each conversion writes its files (`<dir>/<timestamp>/`: `baseline.xml`, `converted.xml`, `convert.log`, `verify.log`, `report.txt`).
+- `--no-relocate`: run from where the binary is, without copying it to the work directory.
+- `--dry-run`: print the OPNsense commands (firmware update, plugin install, restore) instead of running them.
+- `--box-root <dir>` (default `/`): read the OPNsense config from `<dir>/conf/config.xml` and write backups to `<dir>/conf/backup/`. With `--dry-run`, this tries the wizard on a workstation against a config export:
+
+  ```bash
+  mkdir -p box/conf && cp opnsense-baseline.xml box/conf/config.xml
+  pfopn-convert wizard source-pfsense.xml --box-root box --work-dir work --dry-run
+  ```
+
+`verify` runs without `--strict`: the duplicate-rule warnings every tested box had would otherwise block the restore. Errors from `convert` or `verify`, or a change to the box's config after the conversion (for example a plugin installed since), block the restore.

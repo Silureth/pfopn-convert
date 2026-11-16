@@ -95,6 +95,8 @@ use pfopn_convert::transform::{
 /// - Kea migration fails (in non-auto mode)
 /// - Output file cannot be written
 pub fn run_convert(args: ConvertArgs) -> Result<()> {
+    eprintln!("pfopn-convert {}", env!("CARGO_PKG_VERSION"));
+
     // Validate that output path doesn't overwrite inputs
     let mut inputs = vec![args.input.as_path()];
     if let Some(path) = &args.target_file {
@@ -555,6 +557,10 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
         dhcp::disable_all(&mut out);
     }
 
+    if to == "opnsense" {
+        mark_revision(&mut out, from);
+    }
+
     // Write final configuration
     write_file(&out, &args.output)
         .with_context(|| format!("failed to write output XML {}", args.output.display()))?;
@@ -565,6 +571,40 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
         print_plugin_report(report);
     }
     Ok(())
+}
+
+/// Record the converter version in the config's revision note, so a restored
+/// box shows which build produced its config (until the next GUI save).
+fn mark_revision(out: &mut XmlNode, from: &str) {
+    let from = if from == "pfsense" {
+        "pfSense"
+    } else {
+        "OPNsense"
+    };
+    let note = format!(
+        "Converted from {from} by pfopn-convert {}",
+        env!("CARGO_PKG_VERSION")
+    );
+    let revision = match out.children.iter().position(|c| c.tag == "revision") {
+        Some(i) => &mut out.children[i],
+        None => {
+            out.children.push(XmlNode::new("revision"));
+            out.children.last_mut().expect("just pushed")
+        }
+    };
+    for (tag, value) in [
+        ("username", "pfopn-convert"),
+        ("description", note.as_str()),
+    ] {
+        match revision.children.iter_mut().find(|c| c.tag == tag) {
+            Some(node) => node.text = Some(value.to_string()),
+            None => {
+                let mut node = XmlNode::new(tag);
+                node.text = Some(value.to_string());
+                revision.children.push(node);
+            }
+        }
+    }
 }
 
 /// Tell the user which OPNsense plugins the source needs and what to do.

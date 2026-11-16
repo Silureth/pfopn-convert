@@ -47,24 +47,7 @@ pub fn enforce_interface_compat(source: &XmlNode, target: &XmlNode) -> Result<()
         );
     }
 
-    let mut missing = Vec::new();
-    for (name, src) in &source_map {
-        let Some(dst) = target_map.get(name) else {
-            if src
-                .if_name
-                .as_deref()
-                .map(is_virtual_if_name)
-                .unwrap_or(false)
-            {
-                // Virtual-backed interfaces (vlan/wg/openvpn/etc) can be created from source config.
-                continue;
-            }
-            missing.push(format_missing(name, src));
-            continue;
-        };
-        let _ = dst;
-    }
-
+    let missing = missing_interfaces(&source_map, &target_map);
     if !missing.is_empty() {
         bail!(
             "interface preflight failed: missing target interfaces: {}",
@@ -74,7 +57,29 @@ pub fn enforce_interface_compat(source: &XmlNode, target: &XmlNode) -> Result<()
     Ok(())
 }
 
-fn is_virtual_if_name(if_name: &str) -> bool {
+/// Source interfaces with no interface of the same logical name in the
+/// target, formatted for messages. Virtual-backed interfaces (VLAN, WireGuard,
+/// OpenVPN, ...) are created from the source and never missing.
+pub fn missing_interfaces(
+    source_map: &BTreeMap<String, InterfaceSpec>,
+    target_map: &BTreeMap<String, InterfaceSpec>,
+) -> Vec<String> {
+    source_map
+        .iter()
+        .filter(|(name, _)| !target_map.contains_key(*name))
+        .filter(|(_, src)| {
+            !src.if_name
+                .as_deref()
+                .map(is_virtual_if_name)
+                .unwrap_or(false)
+        })
+        .map(|(name, src)| format_missing(name, src))
+        .collect()
+}
+
+/// Whether an interface device name is created by the config itself (VLAN,
+/// WireGuard, OpenVPN, ...) rather than being a physical port.
+pub fn is_virtual_if_name(if_name: &str) -> bool {
     let lower = if_name.trim().to_ascii_lowercase();
     if lower.contains('.') {
         // VLAN-style parent.tag device naming (e.g. igb0.50).
