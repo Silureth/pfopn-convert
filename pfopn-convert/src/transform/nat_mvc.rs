@@ -153,6 +153,31 @@ pub fn port_forward_reflection_for_pfsense_source(out: &mut XmlNode) -> Reflecti
     stats
 }
 
+/// pfSense stores "any protocol" on a port forward as `<protocol>any</protocol>`.
+/// OPNsense leaves the field empty for that (the `DNat` model's blank "any")
+/// and writes any other value into pf verbatim, so `any` becomes `proto any`,
+/// a syntax error that keeps pf from loading the whole ruleset (with NAT
+/// reflection once per reflected interface). Removes the field; returns the
+/// number of port forwards changed.
+pub fn port_forward_protocol_any(out: &mut XmlNode) -> usize {
+    let mut changed = 0;
+    if let Some(nat) = out.children.iter_mut().find(|c| c.tag == "nat") {
+        for rule in nat.children.iter_mut().filter(|c| c.tag == "rule") {
+            let before = rule.children.len();
+            rule.children.retain(|c| {
+                !(c.tag == "protocol"
+                    && c.text
+                        .as_deref()
+                        .is_some_and(|t| t.trim().eq_ignore_ascii_case("any")))
+            });
+            if rule.children.len() != before {
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
 /// Map one pfSense/legacy `<onetoone>` entry (see `MFP1_0_4.php`).
 fn onetoone_rule(legacy: &XmlNode) -> Result<XmlNode, String> {
     let source = address_of(legacy.get_child("source"))
@@ -399,7 +424,33 @@ fn stable_uuid(seed: &str) -> String {
 mod tests {
     use xml_diff_core::parse;
 
-    use super::{move_legacy_nat_to_mvc, port_forward_reflection_for_pfsense_source};
+    use super::{
+        move_legacy_nat_to_mvc, port_forward_protocol_any,
+        port_forward_reflection_for_pfsense_source,
+    };
+
+    #[test]
+    fn port_forward_protocol_any_is_emptied() {
+        let mut out = parse(
+            br#"<opnsense><nat>
+                <rule><protocol>any</protocol><target>10.0.0.1</target></rule>
+                <rule><protocol>tcp/udp</protocol><target>10.0.0.2</target></rule>
+                <onetoone><protocol>any</protocol></onetoone>
+            </nat></opnsense>"#,
+        )
+        .expect("parse");
+        assert_eq!(port_forward_protocol_any(&mut out), 1);
+        let nat = out.get_child("nat").unwrap();
+        let rules = nat.get_children("rule");
+        assert_eq!(rules[0].get_child("protocol"), None);
+        assert_eq!(rules[0].get_text(&["target"]), Some("10.0.0.1"));
+        assert_eq!(rules[1].get_text(&["protocol"]), Some("tcp/udp"));
+        assert!(nat
+            .get_child("onetoone")
+            .unwrap()
+            .get_child("protocol")
+            .is_some());
+    }
 
     #[test]
     fn proxy_reflection_becomes_purenat_with_helper() {

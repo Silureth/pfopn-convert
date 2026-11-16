@@ -629,22 +629,63 @@ impl Wizard {
             return Ok(());
         }
 
-        let now = now_unix();
-        let backup = self.env.add_backup(&run.converted, now)?;
+        let backups = self.env.scan_backups();
+        if !backups.broken.is_empty() {
+            ui::show_text(
+                "Restore",
+                &format!(
+                    "OPNsense's restore stops on these files in {}, because their names have no valid time:\n\n  {}\n\nMove them out of that folder (or delete them), then try again.",
+                    self.env.backup_dir().display(),
+                    backups.broken.join("\n  ")
+                ),
+            );
+            return Ok(());
+        }
+
+        // OPNsense's restore never lists the newest backup (it takes it to be
+        // the running config). So the converted config goes in newer than
+        // every existing backup, and a copy of the running config on top of
+        // it: the converted config is entry 1.
+        let converted_time = now_unix().max(backups.newest.map_or(0, |t| t + 1));
+        let converted_backup = self.env.add_backup(&run.converted, converted_time)?;
+        let running_backup = self
+            .env
+            .add_backup(&self.env.config_path(), converted_time + 1)?;
         if !self.env.dry_run() {
             println!(
-                "The converted config was added to the config backups as {}.",
-                backup.display()
+                "The converted config was added to the config backups as {},\nwith a copy of the running config as {} after it.",
+                converted_backup.display(),
+                running_backup.display()
             );
         }
-        println!("OPNsense's restore (console option 13) starts now.");
-        println!("Choose the backup made just now (the newest entry), check the difference,");
-        println!("confirm, and reboot when it asks.\n");
+        println!("\nOPNsense's restore (console option 13) starts now. In its list, pick entry 1:");
+        println!(
+            "  {}  pfopn-convert: Converted from pfSense by pfo...",
+            display_time(converted_time)
+        );
+        println!("Check the difference ('q' leaves it), answer y to restore and y to reboot.\n");
         if !self.env.dry_run() {
             pause("Press Enter to continue.");
         }
-        self.env.run_interactive("opnsense-shell", &["restore"])?;
-        pause("Restore finished without a reboot. Press Enter to return to the menu.");
+        let finished = self.env.run_interactive("opnsense-shell", &["restore"])?;
+
+        // Still here: the restore ended without a reboot.
+        let now_running = fs::read(self.env.config_path()).ok();
+        if now_running.is_some() && now_running == fs::read(&run.converted).ok() {
+            pause("The converted config is now the running config, without a reboot.\nReboot the box (console option 6) so every service starts with it.\nPress Enter to return to the menu.");
+        } else if now_running == at_convert {
+            // Nothing restored: take the two backups out again, so a retry
+            // does not pile them up.
+            self.env.remove_backup(&converted_backup);
+            self.env.remove_backup(&running_backup);
+            pause(if finished {
+                "Nothing was restored. Press Enter to return to the menu."
+            } else {
+                "OPNsense's restore stopped with an error (see above). Nothing was restored.\nPress Enter to return to the menu."
+            });
+        } else {
+            pause("The box's config changed, but it is not the converted config (another backup restored?).\nPress Enter to return to the menu.");
+        }
         Ok(())
     }
 }
@@ -771,6 +812,21 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// `Mon Nov 16 16:07:50 UTC 2026`-like time as OPNsense's restore list
+/// shows it (in UTC; the box's own time zone may differ).
+fn display_time(unix: u64) -> String {
+    let stamp = timestamp_dir_name(unix);
+    format!(
+        "{}-{}-{} {}:{}:{} UTC",
+        &stamp[0..4],
+        &stamp[4..6],
+        &stamp[6..8],
+        &stamp[9..11],
+        &stamp[11..13],
+        &stamp[13..15]
+    )
+}
+
 /// `YYYYMMDD-HHMMSS` (UTC) for a run directory.
 fn timestamp_dir_name(unix: u64) -> String {
     let days = (unix / 86_400) as i64;
@@ -803,6 +859,7 @@ mod tests {
         assert_eq!(timestamp_dir_name(0), "19700101-000000");
         assert_eq!(timestamp_dir_name(1_763_287_000), "20251116-095640");
         assert_eq!(timestamp_dir_name(951_782_400), "20000229-000000");
+        assert_eq!(display_time(1_794_845_270), "2026-11-16 16:07:50 UTC");
     }
 
     #[test]

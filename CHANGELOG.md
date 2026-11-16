@@ -1,28 +1,45 @@
 # Changelog
 
-## v0.5.3 (unreleased)
+## v0.5.5 (2026-11-16)
+
+A new on-box wizard that runs the migration as a menu on the OPNsense box itself, pfBlockerNG DNSBL and GeoIP conversion, and fixes from a fourth production migration: port forwards with protocol "any" or to an "interface address", users' password hashes, half-set adaptive timeouts. 0.5.1 to 0.5.4 were test builds and were not released.
 
 ### Wizard
 
-- New `wizard` command: a menu-driven migration on the OPNsense box itself (system check, OPNsense update, plugin install, conversion options, convert + verify, restore through OPNsense's console restore). It copies itself and the pfSense config from a CD/USB medium to `/root/pfopn-convert/`. `tools/make_media.sh` builds the ISO. See [docs/wizard.md](docs/wizard.md). Tested on an OPNsense 26.7.8 box up to convert and verify; the restore step has not been run on a box yet. 0.5.2 fixes the screen not being fully redrawn after OPNsense's update or plugin install, and shows the version and source in the menu. 0.5.3 shows the conversion result as a summary, with the warnings, info lines and verify issues in separate, readable lists.
-
-### Documentation
-
-- README: new [On-box wizard](README.md#on-box-wizard) section (getting the binary and the config onto the box, the menu entries, what stays manual after the restore) and a `wizard` row in the command table. `docs/commands.md` describes the `wizard` options, including trying it on a workstation with `--box-root` and `--dry-run`.
-
-### Verify
-
-- Duplicate-rule warnings name the interface and the rules' descriptions instead of rule UUIDs, and say why it happens (several port forwards to the same target): "2 rules on opt2 match the same traffic, only the first one takes effect ...: 'NAT x HTTP', 'NAT x http 2'".
-
-### Versioning
-
-- Every build given out for testing gets its own patch version. `convert` prints the version first and writes it into the converted config's revision note ("Converted from pfSense by pfopn-convert 0.5.3").
+- New `wizard` command: a menu-driven migration on the new OPNsense box (system check, OPNsense update, plugin install, conversion options, convert + verify, restore). The box's live config is the baseline, so no baseline export is needed. The firmware update, plugin install and restore use OPNsense's own commands (`opnsense-shell firmware`, the GUI's plugin installer, `opnsense-shell restore`).
+- It starts from a CD or USB stick, then copies itself and the pfSense config to `/root/pfopn-convert/`. `tools/make_media.sh` builds the ISO from the FreeBSD binary and the config.
+- The conversion result is a summary, with the warnings, info lines and verify issues in separate lists. Each run's files are kept in `/root/pfopn-convert/<timestamp>/`.
+- The restore adds the converted config to OPNsense's config backups with a copy of the running config after it, so it is entry 1 in OPNsense's restore list (the list never shows the newest backup). Backup files whose names OPNsense's restore cannot read (it stops on them) are reported first. If nothing was restored, the two backups are removed again.
+- Before the restore, a warning screen covers the network, how to reach the box after the reboot, and what was not converted. You must confirm that a snapshot exists and that only an isolated network is connected. The restore is refused if the conversion failed or the box's config changed since.
+- Tested on an OPNsense 26.7.8 box up to the restore. See [README](README.md#on-box-wizard) and [docs/wizard.md](docs/wizard.md).
 
 ### Conversion
 
-- pfBlockerNG DNSBL becomes an Unbound DNS blocklist with `--pfblocker-feeds`: feeds of the enabled groups (dead ones skipped, adblock-format EasyList/EasyPrivacy replaced by OPNsense's predefined lists), the suppression list as anchored allowlist patterns, custom domains, and a cron job "Update Unbound DNSBLs" on pfBlockerNG's schedule. Without the switch a warning says it was not converted.
+- "Interface address" (`opt2ip`) in port forwards and rules becomes the interface's static IP on interfaces with IP alias or CARP virtual IPs. pfSense meant only the interface's own IP; OPNsense writes `(vtnet3)`, which pf expands to every address on the interface. A port forward of port 443 to "opt2 address" then also caught HTTPS to every virtual IP on opt2 and sent it to its host. `verify` warns about such references (`interface_address_with_vips`).
+- Users' password hashes move from pfSense's `bcrypt-hash`/`sha512-hash` to `password`, so their pfSense passwords keep working. Before, such users had no password for OPNsense, its user model rejected every save of the user list (no user could be edited or deleted) and its boot migration failed. `verify` reports users without a password (`user_password_missing`).
+- Adaptive state timeouts with only start or end set are removed: pfSense ignored them, and OPNsense refused to save Firewall > Settings > Advanced (`verify`: `adaptive_timeouts_half_set`).
+- Port forwards with protocol "any" get an empty protocol, as OPNsense stores it. Before, `<protocol>any</protocol>` was copied, OPNsense wrote `proto any` into pf, and pf refused the whole ruleset (once per reflected interface with NAT reflection on). Found in the restore on a test box; `verify` reports it as `port_forward_protocol_any`.
+- pfBlockerNG DNSBL becomes an Unbound DNS blocklist with `--pfblocker-feeds`. It gets:
+  - the feeds of the enabled groups (dead ones skipped, adblock-format EasyList/EasyPrivacy replaced by OPNsense's predefined lists),
+  - the suppression list as anchored allowlist patterns,
+  - the custom domains,
+  - a cron job "Update Unbound DNSBLs" on pfBlockerNG's schedule.
+
+  Without the switch a warning says it was not converted.
 - pfBlockerNG GeoIP aliases (`pfB_Asia_v4`, ...) become OPNsense GeoIP aliases with `--pfblocker-feeds`; the GeoIP download URL is set from pfBlockerNG's MaxMind license key. Before, they stayed empty URL tables and their rules matched nothing.
-- pfBlockerNG's DNSBL virtual IP (10.10.10.1 on lo0) and `pfB_DNSBL_*` port alias are removed; its include line in the Unbound custom options no longer causes a warning.
+- pfBlockerNG's DNSBL virtual IP (10.10.10.1 on lo0) and its `pfB_DNSBL_*` port alias are removed. Its include line in the Unbound custom options no longer causes a warning.
+
+### Verify
+
+- Duplicate-rule warnings name the interface and the rules' descriptions instead of rule UUIDs, and say why it usually happens (several port forwards to the same target): "2 rules on opt2 match the same traffic, only the first one takes effect ...: 'NAT x HTTP', 'NAT x http 2'".
+
+### Versioning
+
+- Every build given out for testing gets its own patch version. `convert` prints the version first and writes it into the converted config's revision note ("Converted from pfSense by pfopn-convert 0.5.5").
+
+### Documentation
+
+- README: new [On-box wizard](README.md#on-box-wizard) section and a `wizard` row in the command table. `docs/commands.md` describes the `wizard` options, including how to try it on a workstation with `--box-root` and `--dry-run`.
 
 ## v0.5.0 (2026-11-12)
 

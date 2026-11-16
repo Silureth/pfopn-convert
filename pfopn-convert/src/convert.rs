@@ -50,8 +50,8 @@ use pfopn_convert::merge::{apply_safe_merge, MergeOptions, MergeTarget};
 use pfopn_convert::transform::{
     auth_servers, bridges, device_refs, dhcp, filter_mvc, gateways_mvc, html_entities, ifgroups,
     interface_presence, interface_settings, lan_ip, logical_refs, nat_mvc, openvpn, opn_plugins,
-    opnsense_assignments, pfblocker, pfblocker_dnsbl, reply_to, rule_flags, separators, syslog_mvc,
-    unbound_mvc, vlan_ifnames, wireguard,
+    opnsense_assignments, pfblocker, pfblocker_dnsbl, pfsense_semantics, reply_to, rule_flags,
+    separators, syslog_mvc, system_users, unbound_mvc, vlan_ifnames, wireguard,
 };
 
 /// Execute the main configuration conversion workflow.
@@ -300,6 +300,39 @@ pub fn run_convert(args: ConvertArgs) -> Result<()> {
             }
             for warning in &reply.warnings {
                 eprintln!("warning: reply-to: {warning}");
+            }
+            let if_addr = pfsense_semantics::interface_address_refs(&mut out);
+            for replaced in &if_addr.replaced {
+                eprintln!(
+                    "info: interface address: {replaced} (on OPNsense the interface address also matches its virtual IPs; pfSense meant only the interface's own IP)"
+                );
+            }
+            for kept in &if_addr.kept {
+                eprintln!(
+                    "warning: interface address: {kept}: on OPNsense it also matches the interface's virtual IPs, and the interface has no static address to use instead; check the rule"
+                );
+            }
+            if let Some(lone) = pfsense_semantics::half_set_adaptive_timeouts(&mut out) {
+                eprintln!(
+                    "info: adaptive state timeouts: removed {lone}; pfSense only applies them when start and end are both set, and OPNsense refuses to save Firewall > Settings > Advanced with only one"
+                );
+            }
+            let (moved, no_password) = system_users::move_pfsense_password_hashes(&mut out);
+            if moved > 0 {
+                eprintln!(
+                    "info: users: moved the password hash of {moved} user(s) from pfSense's bcrypt-hash/sha512-hash to password; their pfSense passwords keep working"
+                );
+            }
+            for name in &no_password {
+                eprintln!(
+                    "warning: users: '{name}' has no password; OPNsense rejects every save of the user list until it has one (set it with the console's root password reset or in the config)"
+                );
+            }
+            let any_proto = nat_mvc::port_forward_protocol_any(&mut out);
+            if any_proto > 0 {
+                eprintln!(
+                    "info: {any_proto} port forward(s) with protocol 'any': protocol left empty, as OPNsense stores \"any\" (pf rejects 'proto any')"
+                );
             }
             let reflection = nat_mvc::port_forward_reflection_for_pfsense_source(&mut out);
             if reflection.rewritten > 0 {

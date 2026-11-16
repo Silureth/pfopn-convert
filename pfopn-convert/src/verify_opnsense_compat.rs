@@ -19,6 +19,12 @@
 //!   ICMP, ...). pf may still load it, but every GUI save of rules fails.
 //! - `icmp_type_any`: a firewall rule with ICMP type `any` (pfSense's "all
 //!   types"); OPNsense writes it to pf verbatim, a syntax error.
+//! - `user_password_missing`: a user without `<password>` (pfSense's
+//!   `bcrypt-hash`/`sha512-hash` are not read); OPNsense's user model rejects
+//!   every save of the user list and its boot migration fails.
+//! - `port_forward_protocol_any`: a port forward with protocol `any`
+//!   (pfSense's "any"); OPNsense writes it to pf as `proto any`, a syntax
+//!   error. OPNsense stores "any" as an empty protocol.
 //! - `outbound_nat_family_mismatch`: an IPv4 outbound NAT rule with an IPv6
 //!   address (or the reverse); pf rejects the whole ruleset.
 //! - `alias_legacy_fields`: an MVC alias still using pfSense's `address`/`url`
@@ -31,6 +37,11 @@
 //!   `<enabled>` (the route would come up enabled).
 //!
 //! Warnings:
+//! - `interface_address_with_vips`: "<if> address" in a port forward or
+//!   rule on an interface with virtual IPs; OPNsense matches all of them,
+//!   pfSense only the interface's own IP.
+//! - `adaptive_timeouts_half_set`: only one of adaptive start/end set;
+//!   OPNsense refuses to save Firewall > Settings > Advanced.
 //! - `mvc_section_missing_version`: a populated MVC section without a
 //!   `version` attribute, so OPNsense re-runs every old migration on it.
 //! - `pfsense_match_rule` / `pfsense_nat64_rule`: pfSense-only rule features
@@ -53,6 +64,8 @@ pub fn opnsense_compat_findings(root: &XmlNode) -> Vec<VerifyFinding> {
     gateway_findings(root, &mut out);
     outbound_family_findings(root, &mut out);
     icmp_any_findings(root, &mut out);
+    port_forward_any_findings(root, &mut out);
+    pfsense_semantics_findings(root, &mut out);
     rule_model_findings(root, &mut out);
     pfsense_rule_feature_findings(root, &mut out);
     alias_findings(root, &mut out);
@@ -228,6 +241,112 @@ fn icmp_any_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
                 ),
             ));
         }
+    }
+}
+
+fn port_forward_any_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
+    for (idx, rule) in children(root.get_child("nat"), "rule").iter().enumerate() {
+        let any = rule
+            .get_text(&["protocol"])
+            .is_some_and(|p| p.trim().eq_ignore_ascii_case("any"));
+        if any {
+            let descr = rule.get_text(&["descr"]).map(str::trim).unwrap_or("");
+            out.push(error(
+                "port_forward_protocol_any",
+                format!(
+                    "port forward #{} {}has protocol 'any'; OPNsense writes it to pf as 'proto any' and pf rejects the whole ruleset (leave the protocol empty for any)",
+                    idx + 1,
+                    if descr.is_empty() { String::new() } else { format!("('{descr}') ") },
+                ),
+            ));
+        }
+    }
+}
+
+fn pfsense_semantics_findings(root: &XmlNode, out: &mut Vec<VerifyFinding>) {
+    if let Some(system) = root.get_child("system") {
+        for user in system.get_children("user") {
+            let has_password = user
+                .get_text(&["password"])
+                .is_some_and(|p| !p.trim().is_empty());
+            if !has_password {
+                let name = user.get_text(&["name"]).map(str::trim).unwrap_or("?");
+                out.push(error(
+                    "user_password_missing",
+                    format!(
+                        "user '{name}' has no password; OPNsense rejects every save of the user list and its boot migration fails{}",
+                        if user.get_child("bcrypt-hash").is_some() || user.get_child("sha512-hash").is_some() {
+                            " (the pfSense hash is in bcrypt-hash/sha512-hash, which OPNsense does not read)"
+                        } else {
+                            ""
+                        }
+                    ),
+                ));
+            }
+        }
+        let set = |tag: &str| {
+            system
+                .get_text(&[tag])
+                .is_some_and(|v| !v.trim().is_empty())
+        };
+        if set("adaptivestart") != set("adaptiveend") {
+            out.push(warning(
+                "adaptive_timeouts_half_set",
+                "only one of the adaptive state timeouts (start/end) is set; OPNsense refuses to save Firewall > Settings > Advanced until both or neither are".to_string(),
+            ));
+        }
+    }
+
+    let with_vips: Vec<String> = children(root.get_child("virtualip"), "vip")
+        .into_iter()
+        .filter(|v| {
+            matches!(
+                v.get_text(&["mode"]).map(str::trim),
+                Some("ipalias") | Some("carp")
+            )
+        })
+        .filter_map(|v| v.get_text(&["interface"]).map(|i| i.trim().to_string()))
+        .collect();
+    let refers = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .and_then(|v| v.strip_suffix("ip"))
+            .filter(|name| with_vips.iter().any(|i| i == name))
+            .map(str::to_string)
+    };
+    let mut hits = Vec::new();
+    for (kind, rule) in children(root.get_child("nat"), "rule")
+        .into_iter()
+        .map(|r| ("port forward", r))
+        .chain(
+            children(root.get_child("filter"), "rule")
+                .into_iter()
+                .map(|r| ("rule", r)),
+        )
+    {
+        for side in ["source", "destination"] {
+            if let Some(name) = refers(rule.get_text(&[side, "network"])) {
+                let descr = rule.get_text(&["descr"]).map(str::trim).unwrap_or("");
+                hits.push(format!("{kind} '{descr}' ({side} {name} address)"));
+            }
+        }
+    }
+    for rule in children(
+        path(root, &["OPNsense", "Firewall", "Filter", "rules"]),
+        "rule",
+    ) {
+        for field in ["source_net", "destination_net"] {
+            if let Some(name) = refers(rule.get_text(&[field])) {
+                let descr = rule.get_text(&["description"]).map(str::trim).unwrap_or("");
+                hits.push(format!("rule '{descr}' ({field} {name} address)"));
+            }
+        }
+    }
+    for hit in hits {
+        out.push(warning(
+            "interface_address_with_vips",
+            format!("{hit}: on OPNsense the interface address also matches the interface's virtual IPs; pfSense meant only the interface's own IP"),
+        ));
     }
 }
 
@@ -516,7 +635,9 @@ mod tests {
                   <rule><type>match</type></rule>
                   <rule><type>pass</type><nat><destination>64:ff9b::/96</destination></nat></rule>
                 </filter>
-                <nat><onetoone><external>203.0.113.1</external></onetoone></nat>
+                <nat><onetoone><external>203.0.113.1</external></onetoone><rule><protocol>any</protocol><descr>all to host</descr><destination><network>wanip</network></destination></rule></nat>
+                <virtualip><vip><mode>ipalias</mode><interface>wan</interface></vip></virtualip>
+                <system><user><name>u</name><sha512-hash>$6$x</sha512-hash></user><adaptiveend>9</adaptiveend></system>
                 <staticroutes version="1.0.1"><route><network>10.0.0.0/8</network><disabled></disabled></route></staticroutes>
                 <OPNsense>
                   <Firewall>
@@ -535,6 +656,10 @@ mod tests {
             "interface_flag_empty",
             "outbound_nat_family_mismatch",
             "icmp_type_any",
+            "port_forward_protocol_any",
+            "user_password_missing",
+            "adaptive_timeouts_half_set",
+            "interface_address_with_vips",
             "rule_model_invalid",
             "kea_pool_separator",
             "kea_reservation_mac_and_client_id",

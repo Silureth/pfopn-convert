@@ -53,10 +53,14 @@ Checks this fork added, for problems that OPNsense does not report or only repor
 | `nat_legacy_ignored` | error | 1:1 NAT or NPt in the old `<nat>` section on 26.7+, where they are ignored |
 | `outbound_nat_family_mismatch` | error | an IPv4 outbound NAT rule with an IPv6 address or the reverse; pf rejects the whole ruleset |
 | `icmp_type_any` | error | ICMP type `any` on a rule; pf rejects the whole ruleset |
+| `port_forward_protocol_any` | error | a port forward with protocol `any`, which OPNsense writes to pf as `proto any`; pf rejects the whole ruleset |
+| `user_password_missing` | error | a user without `password` (pfSense's `bcrypt-hash`/`sha512-hash` are not read); OPNsense rejects every save of the user list |
 | `staticroute_disabled_ignored` | error | a disabled route using `<disabled>` where 26.7 reads `<enabled>` |
 | `kea_pool_separator` | error | Kea pools joined with commas |
 | `kea_reservation_mac_and_client_id` | error | a Kea reservation with both a MAC address and a client ID |
 | `mvc_section_missing_version` | warning | an OPNsense section without a `version` attribute, so OPNsense re-runs all of its migrations at boot |
+| `interface_address_with_vips` | warning | "interface address" in a port forward or rule on an interface with virtual IPs; OPNsense matches all of them, pfSense only the interface's own IP |
+| `adaptive_timeouts_half_set` | warning | only one of adaptive start/end set; OPNsense refuses to save Firewall > Settings > Advanced |
 | `pfsense_match_rule`, `pfsense_nat64_rule` | warning | pfSense-only rule types that stay in the old format |
 
 `verify` also runs the original tool's checks: missing interface, alias, gateway and schedule references; duplicate interface assignments and rule signatures (`duplicate_firewall_rule` is a warning naming the interface and the rules; on a converted pfSense config it usually means the source had the same rule twice, most often the filter rules of several port forwards to the same internal host and port); bridges; NAT interfaces; WireGuard interface assignments; and the expected sections and fields per platform version.

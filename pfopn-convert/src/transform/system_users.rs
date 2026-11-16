@@ -18,6 +18,54 @@ pub fn to_opnsense(out: &mut XmlNode, source: &XmlNode, _destination_baseline: &
     remove_user_by_name(out, "admin");
 }
 
+/// pfSense keeps a user's password hash in `<bcrypt-hash>` or (older
+/// accounts) `<sha512-hash>`; OPNsense only reads `<password>`, which takes
+/// both formats (`password_verify`). Users copied with the pfSense tags have
+/// no password for OPNsense: its user model rejects them on every save and
+/// in the boot-time migration ("A password is required"), so no user can be
+/// edited or deleted in the GUI.
+///
+/// Moves the hash into `<password>` for every user that has none. Returns the
+/// number of users changed and the names of users with no hash at all.
+pub fn move_pfsense_password_hashes(out: &mut XmlNode) -> (usize, Vec<String>) {
+    let mut moved = 0;
+    let mut missing = Vec::new();
+    let Some(system) = out.children.iter_mut().find(|n| n.tag == "system") else {
+        return (0, missing);
+    };
+    for user in system.children.iter_mut().filter(|n| n.tag == "user") {
+        let has_password = user
+            .get_text(&["password"])
+            .is_some_and(|p| !p.trim().is_empty());
+        if !has_password {
+            let hash = ["bcrypt-hash", "sha512-hash"].iter().find_map(|tag| {
+                user.get_text(&[tag])
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+            });
+            match hash {
+                Some(hash) => {
+                    user.children.retain(|c| c.tag != "password");
+                    let mut node = XmlNode::new("password");
+                    node.text = Some(hash);
+                    user.children.push(node);
+                    moved += 1;
+                }
+                None => missing.push(
+                    user.get_text(&["name"])
+                        .map(str::trim)
+                        .unwrap_or("?")
+                        .to_string(),
+                ),
+            }
+        }
+        user.children
+            .retain(|c| c.tag != "bcrypt-hash" && c.tag != "sha512-hash");
+    }
+    (moved, missing)
+}
+
 /// Convert user accounts from OPNsense to pfSense format.
 ///
 /// Key differences:

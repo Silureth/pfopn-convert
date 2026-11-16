@@ -1,6 +1,6 @@
 # On-box migration wizard
 
-Status: `pfopn-convert wizard` since 0.5.3. Tested on an OPNsense 26.7.8 box up to convert and verify; the restore step has not been run on a box yet. The user-facing steps are in the [README](../README.md#on-box-wizard), the options in [commands.md](commands.md#wizard).
+Status: `pfopn-convert wizard` since 0.5.4. Tested on an OPNsense 26.7.8 box up to the restore. The user-facing steps are in the [README](../README.md#on-box-wizard), the options in [commands.md](commands.md#wizard).
 
 ## Goal
 
@@ -108,8 +108,10 @@ A warning screen. It says:
 
 The user confirms that a snapshot or backup exists, that only an isolated network is connected, and types `RESTORE`. Then the wizard:
 
-1. copies the converted config into `/conf/backup/` as a regular config backup (`config-<unix time>.xml`, the newest one);
-2. starts OPNsense's own restore (`opnsense-shell restore`, the same as console option 13). It lists the backups with the converted one first, shows the difference to the current config, asks for confirmation, and offers to reboot.
+1. checks `/conf/backup/` for `config-*.xml` files whose names have no valid time (for example `config-.xml`). OPNsense's restore stops on them, so the wizard lists them and stops;
+2. copies the converted config into `/conf/backup/` as a regular config backup (`config-<unix time>.xml`, newer than every existing one), and a copy of the running config one second after it. OPNsense's restore never lists the newest backup, because it takes that to be the running config, so this puts the converted config at entry 1;
+3. starts OPNsense's own restore (`opnsense-shell restore`, the same as console option 13). The user picks entry 1, sees the difference to the current config, confirms, and reboots;
+4. if the restore ends without a reboot, says whether the converted config is now running. If nothing was restored, it removes the two backups again, so a retry does not pile them up.
 
 The converted config stays in the backup list, and the config before the restore is in it too, so the restore can be undone the same way (console option 13, or System → Configuration → History).
 

@@ -55,7 +55,7 @@ These steps run the conversion on a workstation; the [on-box wizard](#on-box-wiz
 
 `pfopn-convert wizard` does steps 1–6 of the [migration workflow](#migration-workflow) as a text menu on the new OPNsense box, in the style of the pfSense and OPNsense installers. The box's own live config is the baseline, so there is no baseline export and no copying files between the box and a workstation. The firmware update, plugin install and restore are done by OPNsense's own commands.
 
-> Status: tested on an OPNsense 26.7.8 box up to convert and verify. The restore step has not been run on a box yet; the [workflow above](#migration-workflow) is the tested path.
+> Status: tested on an OPNsense 26.7.8 box up to the restore; no production migration has been done with it yet. The [workflow above](#migration-workflow) is the tested path.
 
 You need the FreeBSD binary (`pfopn-convert-freebsd-x86_64.tar.gz` from [Releases](https://github.com/Silureth/pfopn-convert/releases)) and the pfSense config backup.
 
@@ -85,7 +85,7 @@ You need the FreeBSD binary (`pfopn-convert-freebsd-x86_64.tar.gz` from [Release
    | 3. Plugins | installs the plugins the source needs (see [Plugins](#plugins)), the same way the GUI does |
    | 4. Conversion options | `--pfblocker-feeds` (on when pfBlockerNG is in the source), `--legacy-rules`, `--no-separator-categories` |
    | 5. Convert and verify | `convert` against the box's live config, then `verify`; a summary with the warnings, info lines and verify issues in separate lists |
-   | 6. Restore | a warning screen (network, how to reach the box after the reboot, what was not converted), then OPNsense's console restore (`opnsense-shell restore`, console option 13) with the converted config as the newest backup |
+   | 6. Restore | a warning screen (network, how to reach the box after the reboot, what was not converted), then OPNsense's console restore (`opnsense-shell restore`, console option 13), where the converted config is entry 1 |
 
 5. **Take a snapshot or backup before entry 6**, in whatever way suits the setup. The wizard asks for confirmation that one exists, but does not make it. Restore only while an isolated network is connected (step 6 of the workflow). The restore can be undone with console option 13 or System → Configuration → History: the config from before the restore is in the backup list.
 6. After the reboot, continue with steps 7–12 of the [workflow](#migration-workflow); the wizard does not do them yet.

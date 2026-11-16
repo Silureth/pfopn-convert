@@ -113,28 +113,80 @@ impl BoxEnv {
         self.run_interactive(FIRMWARE_LAUNCHER, &["install", plugin])
     }
 
-    /// Copy a converted config into the backup directory under the name
-    /// OPNsense gives its own backups, so `opnsense-shell restore` lists it.
-    /// Ownership and mode are taken from the running config.
-    pub fn add_backup(&self, converted: &Path, unix_time: u64) -> Result<PathBuf> {
+    /// Copy a config into the backup directory under the name OPNsense gives
+    /// its own backups, so `opnsense-shell restore` lists it. Ownership and
+    /// mode are taken from the running config.
+    pub fn add_backup(&self, config: &Path, unix_time: u64) -> Result<PathBuf> {
         let target = self.backup_dir().join(format!("config-{unix_time}.xml"));
         if self.dry_run {
             println!(
                 "[dry-run] would copy {} to {}",
-                converted.display(),
+                config.display(),
                 target.display()
             );
             return Ok(target);
         }
-        fs::copy(converted, &target).with_context(|| {
+        fs::copy(config, &target).with_context(|| {
             format!(
-                "failed to copy the converted config to {}",
+                "failed to copy {} to {}",
+                config.display(),
                 target.display()
             )
         })?;
         copy_owner_and_mode(&self.config_path(), &target)?;
         Ok(target)
     }
+
+    /// Remove a backup this wizard added (dry run: only say so).
+    pub fn remove_backup(&self, backup: &Path) {
+        if self.dry_run {
+            println!("[dry-run] would remove {}", backup.display());
+        } else {
+            let _ = fs::remove_file(backup);
+        }
+    }
+
+    /// The newest backup time, and the `config-*.xml` files whose names
+    /// OPNsense's restore cannot read (it stops on them, 26.7.8).
+    pub fn scan_backups(&self) -> BackupScan {
+        let mut scan = BackupScan::default();
+        let Ok(entries) = fs::read_dir(self.backup_dir()) else {
+            return scan;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !(name.starts_with("config-") && name.ends_with(".xml")) {
+                continue;
+            }
+            match backup_time(&name) {
+                Some(time) => scan.newest = scan.newest.max(Some(time)),
+                None => scan.broken.push(name),
+            }
+        }
+        scan.broken.sort();
+        scan
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct BackupScan {
+    pub newest: Option<u64>,
+    pub broken: Vec<String>,
+}
+
+/// The time in a backup name as OPNsense writes it (`config-<unix>.xml` or
+/// `config-<unix>.<fraction>.xml`); `None` for any other name.
+pub fn backup_time(name: &str) -> Option<u64> {
+    let middle = name.strip_prefix("config-")?.strip_suffix(".xml")?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (secs, fraction) = match middle.split_once('.') {
+        Some((secs, fraction)) => (secs, Some(fraction)),
+        None => (middle, None),
+    };
+    if !digits(secs) || fraction.is_some_and(|f| !digits(f)) {
+        return None;
+    }
+    secs.parse().ok()
 }
 
 #[cfg(unix)]
@@ -184,7 +236,19 @@ pub fn pause(message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_pseudo_interface;
+    use super::{backup_time, is_pseudo_interface};
+
+    #[test]
+    fn backup_names_as_opnsense_reads_them() {
+        assert_eq!(backup_time("config-1794845581.xml"), Some(1_794_845_581));
+        assert_eq!(
+            backup_time("config-1794845094.3076.xml"),
+            Some(1_794_845_094)
+        );
+        assert_eq!(backup_time("config-.xml"), None);
+        assert_eq!(backup_time("config-date +%s.xml"), None);
+        assert_eq!(backup_time("config-1794845094..xml"), None);
+    }
 
     #[test]
     fn pseudo_interfaces_are_not_ports() {

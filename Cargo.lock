@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "pfopn-convert"
-version = "0.5.3"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
