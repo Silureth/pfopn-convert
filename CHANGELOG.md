@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.5.5 (2026-11-16)
+## v0.5.6 (2026-11-17)
 
-A new on-box wizard that runs the migration as a menu on the OPNsense box itself, pfBlockerNG DNSBL and GeoIP conversion, and fixes from a fourth production migration: port forwards with protocol "any" or to an "interface address", users' password hashes, half-set adaptive timeouts. 0.5.1 to 0.5.4 were test builds and were not released.
+A new on-box wizard that runs the migration as a menu on the OPNsense box itself, pfBlockerNG DNSBL and GeoIP conversion, and fixes from a fourth production migration: port forwards with protocol "any" or to an "interface address", users' password hashes, half-set adaptive timeouts, reply-to for sources that cannot be resolved. 0.5.1 to 0.5.5 were test builds and were not released.
 
 ### Wizard
 
@@ -19,6 +19,7 @@ A new on-box wizard that runs the migration as a menu on the OPNsense box itself
 - Users' password hashes move from pfSense's `bcrypt-hash`/`sha512-hash` to `password`, so their pfSense passwords keep working. Before, such users had no password for OPNsense, its user model rejected every save of the user list (no user could be edited or deleted) and its boot migration failed. `verify` reports users without a password (`user_password_missing`).
 - Adaptive state timeouts with only start or end set are removed: pfSense ignored them, and OPNsense refused to save Firewall > Settings > Advanced (`verify`: `adaptive_timeouts_half_set`).
 - Port forwards with protocol "any" get an empty protocol, as OPNsense stores it. Before, `<protocol>any</protocol>` was copied, OPNsense wrote `proto any` into pf, and pf refused the whole ruleset (once per reflected interface with NAT reflection on). Found in the restore on a test box; `verify` reports it as `port_forward_protocol_any`.
+- reply-to: rules whose source cannot be resolved (host names, URL tables, GeoIP) keep reply-to on every interface and get a warning, as before v0.5.0. Since v0.5.0 they got "Disable reply-to" on the default gateway's interface, on the assumption that replies then take the same gateway. That fails when the source host is in another directly connected subnet (or behind a static route): the replies leave through that interface and never arrive. Found on a production box, where a monitoring server in another WAN's subnet could not reach the agents behind two port forwards. **Boxes migrated with v0.5.0 to v0.5.5:** check pass rules on the default gateway's interface that have "Disable reply-to" and a host-name or URL-table source; untick it unless the source is in that interface's own subnet.
 - pfBlockerNG DNSBL becomes an Unbound DNS blocklist with `--pfblocker-feeds`. It gets:
   - the feeds of the enabled groups (dead ones skipped, adblock-format EasyList/EasyPrivacy replaced by OPNsense's predefined lists),
   - the suppression list as anchored allowlist patterns,
@@ -35,7 +36,7 @@ A new on-box wizard that runs the migration as a menu on the OPNsense box itself
 
 ### Versioning
 
-- Every build given out for testing gets its own patch version. `convert` prints the version first and writes it into the converted config's revision note ("Converted from pfSense by pfopn-convert 0.5.5").
+- Every build given out for testing gets its own patch version. `convert` prints the version first and writes it into the converted config's revision note ("Converted from pfSense by pfopn-convert 0.5.6").
 
 ### Documentation
 

@@ -117,7 +117,7 @@ The converted config stays in the backup list, and the config before the restore
 
 ## Later versions
 
-- **After the restore:** the wizard offers itself again at the first login after the reboot and runs the checks from README steps 7 and 11: `pfctl -nf /tmp/rules.debug`; URL table and GeoIP aliases are not empty (offers to refresh them); DNSBL `dnsbl.size` is not 0; the converted plugins' services are running.
+- **After the restore:** the wizard offers itself again at the first login after the reboot and runs the checks from README steps 7 and 11: `pfctl -nf /tmp/rules.debug`; URL table and GeoIP aliases are not empty (offers to refresh them); DNSBL `/var/unbound/data/dnsbl.json` exists and is not empty; the converted plugins' services are running.
 - **After the cutover:** reset the firewall states once (README step 10), re-run the alias/DNSBL checks, checklist of the VPN tunnels and servers from the source with their status.
 - **Resume:** a state file so the wizard remembers the choices across reboots.
 
