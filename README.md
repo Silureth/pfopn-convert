@@ -5,7 +5,7 @@
 
 Converts a pfSense CE config backup into an OPNsense 26.7 config that can be restored on a fresh OPNsense install, and checks it before the restore.
 
-> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) by Sheridan Computers Limited, who wrote the converter this fork builds on (see [Credits](#credits)). This fork covers **pfSense CE (config version 24.6) → OPNsense 26.7** only. It fixes conversion bugs that changed firewall behaviour silently, writes OPNsense 26.7's new rule format, and converts OpenVPN servers, IPsec site-to-site tunnels, the DNS Resolver, remote syslog and common plugins. It was used for three production cutovers to OPNsense 26.7.8; see [Tested migration](#tested-migration).
+> This is a fork of [sheridans/pfopn-convert](https://github.com/sheridans/pfopn-convert) by Sheridan Computers Limited, who wrote the converter this fork builds on (see [Credits](#credits)). This fork covers **pfSense CE (config version 24.6) → OPNsense 26.7** only. It fixes conversion bugs that changed firewall behaviour silently, writes OPNsense 26.7's new rule format, and converts OpenVPN servers, IPsec site-to-site tunnels, the DNS Resolver, remote syslog and common plugins. It was used for four production cutovers to OPNsense 26.7 (26.7.8 and 26.7.9); see [Tested migration](#tested-migration).
 >
 > Report problems with this fork [here](https://github.com/Silureth/pfopn-convert/issues), not to the original project.
 
@@ -55,7 +55,7 @@ These steps run the conversion on a workstation; the [on-box wizard](#on-box-wiz
 
 `pfopn-convert wizard` does steps 1–6 of the [migration workflow](#migration-workflow) as a text menu on the new OPNsense box, in the style of the pfSense and OPNsense installers. The box's own live config is the baseline, so there is no baseline export and no copying files between the box and a workstation. The firmware update, plugin install and restore are done by OPNsense's own commands.
 
-> Status: tested on an OPNsense 26.7.8 box up to the restore; no production migration has been done with it yet. The [workflow above](#migration-workflow) is the tested path.
+> Status: used for one production migration to OPNsense 26.7.9, including the restore (the fourth box in [Tested migration](#tested-migration)). The [workflow above](#migration-workflow) was used for the other three.
 
 You need the FreeBSD binary (`pfopn-convert-freebsd-x86_64.tar.gz` from [Releases](https://github.com/Silureth/pfopn-convert/releases)) and the pfSense config backup.
 
@@ -94,11 +94,12 @@ Each conversion writes the baseline (a copy of the box's config at that time), t
 
 ## Tested migration
 
-This fork was used to migrate three production pfSense CE (config version 24.6) firewalls to OPNsense 26.7.8:
+This fork was used to migrate four production pfSense CE (config version 24.6) firewalls to OPNsense 26.7 (three to 26.7.8, one to 26.7.9):
 
 - **multi-WAN box:** policy routing, about 100 rules, 58 port forwards, virtual IPs, DNS Resolver, remote syslog, Zabbix agent and node_exporter;
 - **VPN box:** an OpenVPN server with LDAP users, two IKEv2 site-to-site tunnels and a Zabbix proxy;
-- **two-WAN box:** port forwards grouped by separators, a static route, OpenVPN and IPsec, SNMP, pfBlockerNG IP lists, Zabbix proxy.
+- **two-WAN box:** port forwards grouped by separators, a static route, OpenVPN and IPsec, SNMP, pfBlockerNG IP lists, Zabbix proxy;
+- **hosting box**, done with the [on-box wizard](#on-box-wizard): about 220 rules, 104 port forwards, 33 virtual IPs, pfBlockerNG IP lists, GeoIP and DNSBL, Zabbix agent.
 
 What was verified on each box, and what was not exercised, is in [docs/tested-migrations.md](docs/tested-migrations.md).
 
@@ -181,7 +182,7 @@ The binary also still contains the original tool's `diff`, `sections`, `inspect`
 
 ## Support status
 
-pfSense → OPNsense, by area. "Used live" means the area was in one of the three [tested migrations](#tested-migration) and was checked after the cutover. The other areas are covered by unit tests and `verify` only.
+pfSense → OPNsense, by area. "Used live" means the area was in one of the four [tested migrations](#tested-migration) and was checked after the cutover. The other areas are covered by unit tests and `verify` only.
 
 | Area | Converted | Used live |
 |---|---|---|
@@ -201,14 +202,14 @@ pfSense → OPNsense, by area. "Used live" means the area was in one of the thre
 | Tailscale | yes (the original converter's code, unchanged) | no |
 | Zabbix agent and proxy, node_exporter, QEMU guest agent | when the plugin is installed in the baseline (see [Plugins](#plugins)) | yes |
 | SNMP | to `os-net-snmp`, when the plugin is installed in the baseline (see [Plugins](#plugins)) | starts and listens; not polled (unused on the tested box) |
-| pfBlockerNG | IP lists, GeoIP lists and DNSBL, with `--pfblocker-feeds`; its floating rules are not | yes (IP lists) |
+| pfBlockerNG | IP lists, GeoIP lists and DNSBL, with `--pfblocker-feeds`; its floating rules are not | yes (IP lists, GeoIP, DNSBL) |
 | Rule and port-forward separators | as categories (see [Separators](#separators)) | restored, not checked in the GUI |
 | Other packages | no; `scan` and `convert` list them | |
 
 Versions:
 
 - **Source:** pfSense CE configs with config version 24.6 (pfSense 2.9.0 on the first box). pfSense's behaviour was checked against its public source, which ends at 2.7.2.
-- **Destination:** OPNsense 26.7, checked against OPNsense 26.7.8's source; all three migrations went to 26.7.8. With an older baseline, rules stay in the old format (see [OPNsense 26.7 targets](#opnsense-267-targets)).
+- **Destination:** OPNsense 26.7, checked against OPNsense 26.7.8's source; three migrations went to 26.7.8, the fourth to 26.7.9. With an older baseline, rules stay in the old format (see [OPNsense 26.7 targets](#opnsense-267-targets)).
 
 ### Known limitations
 

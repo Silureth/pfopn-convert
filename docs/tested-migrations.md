@@ -1,6 +1,6 @@
 # Tested migrations
 
-Three production pfSense firewalls were migrated to OPNsense with this fork. The problems found on the way are in [fixes.md](fixes.md).
+Four production pfSense firewalls were migrated to OPNsense with this fork. The problems found on the way are in [fixes.md](fixes.md).
 
 ## First box: multi-WAN, port forwards, plugins (v0.2.0)
 
@@ -58,6 +58,38 @@ Found after the cutover: TCP connections from hosts in one WAN's own subnet to s
 | SNMP, node_exporter | listen on the converted addresses |
 
 Converted, but not checked separately: separators as categories in the GUI. SNMP was enabled on pfSense but nothing polled it, so the converted service only shows that it starts and listens.
+
+## Fourth box: on-box wizard, many virtual IPs, pfBlockerNG DNSBL (v0.5.5, v0.5.6)
+
+**Source:** pfSense CE (config version 24.6), Proxmox VM, 7 interfaces (WAN, LAN, two public subnets, an HA sync interface that was never used for pfsync, a disabled interface and one internal network; VLANs tagged on the hypervisor). About 220 firewall rules (about 60 with policy routing), 104 port forwards, 44 manual outbound NAT rules, 3 1:1 NAT rules (all disabled), 33 IP-alias virtual IPs, no VPN, and the packages pfBlockerNG-devel (IP lists, a GeoIP list and DNSBL), Zabbix Agent 7, node_exporter and Shellcmd.
+
+**Destination:** OPNsense 26.7.9, migrated with the [on-box wizard](wizard.md), the first box done this way: it updated OPNsense, installed the Zabbix agent, node_exporter and QEMU guest agent plugins, converted with `--pfblocker-feeds` against the box's live config and restored the result. `verify` reported only rules that were already duplicated on pfSense. The old pfSense VM stayed as rollback.
+
+It took three restores. Each attempt found a problem that is fixed in the converter:
+
+| Attempt | Problem | Fixed in |
+|---|---|---|
+| 1 | the converted config was missing from OPNsense's restore list (it never shows the newest backup) | wizard, 0.5.4 |
+| 1 | pf refused the whole ruleset: a port forward with protocol "any" was written as `proto any` | 0.5.4 |
+| 2 | HTTPS to several virtual IPs reached the wrong server: port forwards to "interface address" matched every virtual IP on the interface on OPNsense | 0.5.5 |
+| 2 | no user could be edited, and the boot migration failed: pfSense's password hashes were not moved to OPNsense's field | 0.5.5 |
+| 2 | Firewall > Settings > Advanced could not be saved: only one of the two adaptive state timeouts was set | 0.5.5 |
+| 3 | the monitoring server could not reach the agents behind two port forwards: their rules had lost reply-to, and the server sits in another directly connected subnet | 0.5.6 (fixed by hand on the box) |
+
+Verified on the destination after the third restore and the cutover:
+
+| Area | Result |
+|---|---|
+| Wizard | firmware update, plugin install, convert and verify, restore (the converted config is entry 1 in the restore list) |
+| Firewall ruleset | loads (`pfctl -nf` clean) |
+| Port forwards | reachable from outside, including forwards to virtual IPs and to "interface address" |
+| Users | pfSense passwords work; the user list can be edited |
+| Firewall settings | the Advanced page saves |
+| pfBlockerNG DNSBL | Unbound blocklist with about 217,000 domains |
+| pfBlockerNG IP and GeoIP lists | load (thousands of entries) after a manual refresh, as on the third box; one list stays empty because its only feed is dead, so the converter disabled its alias |
+| Zabbix agents | reachable from the Zabbix server through the port forwards (after the reply-to fix) |
+
+Converted, but not checked separately: the 1:1 NAT rules (disabled on the source) and the disabled interface.
 
 ## Not exercised
 

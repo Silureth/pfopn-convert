@@ -1,6 +1,6 @@
 # On-box migration wizard
 
-Status: `pfopn-convert wizard` since 0.5.4. Tested on an OPNsense 26.7.8 box up to the restore. The user-facing steps are in the [README](../README.md#on-box-wizard), the options in [commands.md](commands.md#wizard).
+Status: `pfopn-convert wizard` since 0.5.4. Used for a production migration to OPNsense 26.7.9, including the restore (the fourth box in [tested-migrations.md](tested-migrations.md)). The user-facing steps are in the [README](../README.md#on-box-wizard), the options in [commands.md](commands.md#wizard).
 
 ## Goal
 
